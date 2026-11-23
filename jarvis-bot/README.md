@@ -60,3 +60,23 @@ Jarvis posts "Jarvis is online" in your channel or DMs. Type `help`.
 ## Later phases (not in this bot)
 
 Gmail/Drive (Jarvis's own Google account, read-only and drafts only), iMessage (Jarvis's own Apple Account), dispatching work to project agents with tap-to-approve. See `../BRAIN_PLAN.md`.
+
+## Agent tasks (added November 23, 2026)
+
+Owners can ask Claude Code (your Claude subscription) to work on a project, with your approval in between:
+
+- `plan <trading|retro|crease> <what you want>`: read-only (Read/Glob/Grep only). Replies with a plan and an id like `T1`.
+- `approve T1`: carries out that plan in a separate copy, `/Users/jarvis/work/T1`, on branch `jarvis/T1`. It may edit, run tests and commit there. `git push` is blocked, and the GitHub token is read-only anyway.
+- `tasks`, `cancel T1`, `discard T1`.
+
+You review and push from a PC (the reply prints the exact commands):
+
+    git fetch epondboys@10.10.10.240:/Users/jarvis/work/T1 jarvis/T1:jarvis/T1
+
+One-time setup:
+
+1. As the jarvis user at the Mac (not through sudo): `claude setup-token`, then `nano ~/.jarvis-bot.env` and paste it after `CLAUDE_CODE_OAUTH_TOKEN=`.
+2. On Jarvis as epondboys, so PCs can fetch task branches from jarvis's folder: `git config --global --add safe.directory '*'`.
+3. Rerun `sudo bash ~/jarvis-bot/install.sh`.
+
+Tasks use your Claude plan's usage limits. One task runs at a time; planning times out after 10 minutes, approved work after 30.
