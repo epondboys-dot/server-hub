@@ -63,7 +63,7 @@ Gmail/Drive (Jarvis's own Google account, read-only and drafts only), iMessage (
 
 ## Agent tasks (added November 23, 2026)
 
-Owners can ask Claude Code (your Claude subscription) to work on a project, with your approval in between:
+Owners can ask Claude Code (your Claude subscription) or Codex (your ChatGPT subscription) to work on a project, with your approval in between. Claude Code is the default; add `--codex` to `plan` to use Codex (it runs in its own read-only or workspace-only sandbox with no network). Codex uses the ChatGPT sign-in saved in the jarvis account, so it needs no token:
 
 - `plan <trading|retro|crease> <what you want>`: read-only (Read/Glob/Grep only). Replies with a plan and an id like `T1`.
 - `approve T1`: carries out that plan in a separate copy, `/Users/jarvis/work/T1`, on branch `jarvis/T1`. It may edit, run tests and commit there. `git push` is blocked, and the GitHub token is read-only anyway.

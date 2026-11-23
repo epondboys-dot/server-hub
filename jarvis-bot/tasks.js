@@ -52,10 +52,32 @@ function git(cwd, args) {
 }
 
 function runClaude(cfg, cwd, args, timeoutMs, id) {
+  return runProc(cfg.CLAUDE_BIN || '/opt/homebrew/bin/claude', cfg, cwd, args, timeoutMs, id, 'Claude Code');
+}
+
+// Codex keeps its ChatGPT sign-in in ~/.codex, so it works from the background service.
+async function runCodex(cfg, cwd, prompt, write, timeoutMs, id) {
+  const outFile = path.join(os.tmpdir(), `jarvis-codex-${id}-${Date.now()}.txt`);
+  const args = ['exec', '--skip-git-repo-check', '-s', write ? 'workspace-write' : 'read-only', '-o', outFile, prompt];
+  const stdout = await runProc(cfg.CODEX_BIN || '/opt/homebrew/bin/codex', cfg, cwd, args, timeoutMs, id, 'Codex');
+  let last = '';
+  try { last = fs.readFileSync(outFile, 'utf8').trim(); fs.unlinkSync(outFile); } catch {}
+  return last || stdout;
+}
+
+function runAgent(agent, cfg, cwd, prompt, write, timeoutMs, id) {
+  if (agent === 'codex') return runCodex(cfg, cwd, prompt, write, timeoutMs, id);
+  const args = write
+    ? ['-p', prompt, '--permission-mode', 'acceptEdits', '--allowedTools', ...DO_TOOLS, '--disallowedTools', ...BLOCKED, '--output-format', 'text']
+    : ['-p', prompt, '--permission-mode', 'default', '--allowedTools', ...PLAN_TOOLS, '--disallowedTools', ...PLAN_BLOCKED, ...BLOCKED, '--output-format', 'text'];
+  return runClaude(cfg, cwd, args, timeoutMs, id);
+}
+
+function runProc(bin, cfg, cwd, args, timeoutMs, id, label) {
   return new Promise((resolve, reject) => {
     const env = { ...process.env, HOME, PATH: '/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin' };
     if (cfg.CLAUDE_CODE_OAUTH_TOKEN) env.CLAUDE_CODE_OAUTH_TOKEN = cfg.CLAUDE_CODE_OAUTH_TOKEN;
-    const child = spawn(cfg.CLAUDE_BIN || '/opt/homebrew/bin/claude', args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(bin, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
     running = { id, child };
     let out = '', err = '';
     child.stdout.on('data', d => { out += d; });
@@ -65,7 +87,7 @@ function runClaude(cfg, cwd, args, timeoutMs, id) {
     child.on('close', code => {
       clearTimeout(timer); running = null;
       if (code === 0) resolve(out.trim());
-      else reject(new Error(`Claude Code stopped (code ${code}). ${(err || out).trim().slice(-600)}`));
+      else reject(new Error(`${label} stopped (code ${code}). ${(err || out).trim().slice(-600)}`));
     });
   });
 }
@@ -80,8 +102,8 @@ function resolveProject(word) {
 function short(s, n = 80) { s = String(s).replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
 
 const USAGE = [
-  '**Agent tasks** (Claude Code on your plan; nothing reaches GitHub without you)',
-  '- `plan <project> <what you want>`: read-only; replies with a plan and a task id',
+  '**Agent tasks** (Claude Code or Codex; nothing reaches GitHub without you)',
+  '- `plan <project> <what you want>`: read-only; replies with a plan and a task id. Add `--codex` to use Codex instead of Claude Code',
   '- `approve <id>`: carry out that plan in a separate copy on branch `jarvis/<id>`; commits there, never pushes',
   '- `tasks`: recent tasks · `cancel <id>`: stop a running task · `discard <id>`: delete its copy and branch',
   `- Projects: trading, retro, crease`,
@@ -94,19 +116,25 @@ async function handle(text, author, cfg, reply) {
   if (v === 'tasks') {
     const list = Object.values(state.tasks).sort((a, b) => b.n - a.n).slice(0, 8);
     if (!list.length) return reply('No tasks yet.\n\n' + USAGE);
-    return reply(list.map(t => `- **${t.id}** [${t.status}] ${t.repo}: ${short(t.request)}`).join('\n'));
+    return reply(list.map(t => `- **${t.id}** [${t.status}] ${t.agent || 'claude'} · ${t.repo}: ${short(t.request)}`).join('\n'));
   }
 
   if (v === 'plan') {
-    const proj = resolveProject(rest[0]);
-    const request = rest.slice(1).join(' ').trim();
+    let agent = 'claude';
+    const words = rest.filter(w => {
+      if (/^--?codex$/i.test(w)) { agent = 'codex'; return false; }
+      if (/^--?claude$/i.test(w)) { agent = 'claude'; return false; }
+      return true;
+    });
+    const proj = resolveProject(words[0]);
+    const request = words.slice(1).join(' ').trim();
     if (!proj || !request) return reply('Usage: `plan <trading|retro|crease> <what you want>`');
     if (running) return reply(`Busy with ${running.id}. Try again when it finishes, or \`cancel ${running.id}\`.`);
     const n = state.next++;
     const id = `T${n}`;
-    const t = state.tasks[id] = { id, n, repo: proj.repo, request, author, status: 'planning', created: new Date().toISOString() };
+    const t = state.tasks[id] = { id, n, agent, repo: proj.repo, request, author, status: 'planning', created: new Date().toISOString() };
     save();
-    await reply(`**${id}** planning on ${proj.repo} (read-only). This can take a few minutes.`);
+    await reply(`**${id}** planning on ${proj.repo} with ${agent === 'codex' ? 'Codex' : 'Claude Code'} (read-only). This can take a few minutes.`);
     const prompt = [
       'You are planning a change for the owner, who will approve it from their phone.',
       'Read any AGENTS.md, CLAUDE.md and README first and follow their rules.',
@@ -116,12 +144,10 @@ async function handle(text, author, cfg, reply) {
       `Request: ${request}`,
     ].filter(Boolean).join('\n');
     try {
-      t.plan = await runClaude(cfg, proj.dir,
-        ['-p', prompt, '--permission-mode', 'default', '--allowedTools', ...PLAN_TOOLS, '--disallowedTools', ...PLAN_BLOCKED, ...BLOCKED, '--output-format', 'text'],
-        10 * 60 * 1000, id);
+      t.plan = await runAgent(agent, cfg, proj.dir, prompt, false, 10 * 60 * 1000, id);
       t.status = 'planned';
       save();
-      return reply(`**${id} plan** (${proj.repo})\n${t.plan}\n\nTo carry it out: \`approve ${id}\`. Nothing changes until then.`);
+      return reply(`**${id} plan** (${proj.repo}, ${agent === 'codex' ? 'Codex' : 'Claude Code'})\n${t.plan}\n\nTo carry it out: \`approve ${id}\`. Nothing changes until then.`);
     } catch (e) {
       t.status = 'failed'; t.error = e.message; save();
       return reply(`**${id}** planning failed: ${e.message}`);
@@ -146,14 +172,12 @@ async function handle(text, author, cfg, reply) {
         'Carry out this plan, which the owner has approved. Stay within it; if something outside it is needed, stop and explain.',
         'Read any AGENTS.md, CLAUDE.md and README first and follow their rules, including their test and versioning steps.',
         t.repo === 'ai-daytrading-bot' ? TRADING_RULES : '',
-        'Run the project\'s tests if it has them. Commit your work to the current branch with a clear message. Do not push.',
+        'Run the project\'s tests if it has them. Commit your work to the current branch with a clear message if you can; if not, leave the changes and Jarvis will commit them. Never push or change git remotes.',
         'Finish with a short plain-text summary: what changed, test results, anything the owner should check.',
         `Original request: ${t.request}`,
         `Approved plan:\n${t.plan}`,
       ].filter(Boolean).join('\n');
-      t.summary = await runClaude(cfg, wt,
-        ['-p', prompt, '--permission-mode', 'acceptEdits', '--allowedTools', ...DO_TOOLS, '--disallowedTools', ...BLOCKED, '--output-format', 'text'],
-        30 * 60 * 1000, t.id);
+      t.summary = await runAgent(t.agent || 'claude', cfg, wt, prompt, true, 30 * 60 * 1000, t.id);
       if (git(wt, ['status', '--porcelain'])) {
         git(wt, ['add', '-A']);
         git(wt, ['-c', 'user.name=Jarvis', '-c', 'user.email=jarvis@localhost', 'commit', '-q', '-m', `Jarvis ${t.id}: ${short(t.request, 60)}`]);

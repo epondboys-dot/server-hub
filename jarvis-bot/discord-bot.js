@@ -206,7 +206,7 @@ client.on(Events.MessageCreate, async msg => {
     if (cmd === 'briefing') return send(msg.channel, needsYou() || 'No briefing file found yet on this machine.');
     if (cmd === 'reset') { history.delete(msg.channelId); return send(msg.channel, 'Conversation cleared.'); }
     if (tasks.isTaskCommand(text)) {
-      if (!cfg.CLAUDE_CODE_OAUTH_TOKEN) return send(msg.channel, 'Agent tasks are not set up yet: CLAUDE_CODE_OAUTH_TOKEN is missing from the settings file.');
+      if (!cfg.CLAUDE_CODE_OAUTH_TOKEN && !/--?codex\b/i.test(text) && /^plan\b/i.test(text)) return send(msg.channel, 'Claude Code tasks are not set up yet: CLAUDE_CODE_OAUTH_TOKEN is missing from the settings file. Add `--codex` to use Codex.');
       return tasks.handle(text, msg.author.username, cfg, t => send(msg.channel, t));
     }
     if (busy) return send(msg.channel, 'Still working on your last question, one moment.');
