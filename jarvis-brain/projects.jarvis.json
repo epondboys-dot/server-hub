@@ -1,0 +1,139 @@
+{
+  "_note": "Project registry for Jarvis (Mac mini). Read-only clones in /Users/jarvis/projects. Written 2026-11-23.",
+  "projects": [
+    {
+      "id": "trading-desk",
+      "name": "AI Daytrading Bot (Trading Desk)",
+      "repo": "epondboys-dot/ai-daytrading-bot",
+      "path": "/Users/jarvis/projects/ai-daytrading-bot",
+      "target_machine": "2014 Mac mini (Linux), PA: its home and the only machine for any real-money testing; needs Linux versions of its scripts first",
+      "rules": [
+        "AGENTS.md",
+        "docs/OWNER_DECISIONS.md"
+      ],
+      "status": [
+        {
+          "file": "docs/CODEX_NEXT.md",
+          "show": "excerpt",
+          "label": "Open handoff (CODEX_NEXT)"
+        },
+        {
+          "file": "docs/BUILD_STATUS_*.md",
+          "show": "excerpt",
+          "label": "Latest build status"
+        }
+      ],
+      "brain_may": [
+        "read_status",
+        "relay_alerts"
+      ],
+      "brain_never": [
+        "trade",
+        "clear_hard_off",
+        "reset_runtime",
+        "read_credentials"
+      ]
+    },
+    {
+      "id": "retro-game-platform",
+      "name": "Rewind Arcade (retro game platform)",
+      "repo": "epondboys-dot/retro-game-platform",
+      "path": "/Users/jarvis/projects/retro-game-platform",
+      "target_machine": "Cloudflare + Supabase (already live, invite-only); dev and tests on PA PC",
+      "rules": [
+        "AGENTS.md",
+        "PROJECT_BRIEF.md",
+        "BUILD_PLAN.md"
+      ],
+      "status": [
+        {
+          "file": "BUILD_PLAN.md",
+          "show": "lines",
+          "match": "^\\|.*in progress",
+          "label": "Milestones in progress"
+        },
+        {
+          "file": "HANDOFF.md",
+          "show": "excerpt",
+          "label": "Latest handoff"
+        },
+        {
+          "file": "docs/m4-first-creator-run.md",
+          "show": "excerpt",
+          "label": "First creator run checklist"
+        }
+      ],
+      "brain_may": [
+        "read_status",
+        "run_tests",
+        "dispatch_with_approval"
+      ],
+      "brain_never": [
+        "public_deploy_without_approval",
+        "enable_payments"
+      ],
+      "hosting": "Cloudflare Pages (rewind-store.pages.dev, invite-only) + Supabase"
+    },
+    {
+      "id": "the-crease",
+      "name": "The Crease (lacrosse content engine)",
+      "repo": "epondboys-dot/the-crease",
+      "path": "/Users/jarvis/projects/the-crease",
+      "target_machine": "New Mac mini (scheduling), PA PC (render worker)",
+      "rules": [
+        "README.md",
+        "docs/handoff-*.md"
+      ],
+      "status": [
+        {
+          "file": "docs/handoff-*.md",
+          "show": "excerpt",
+          "label": "Latest handoff"
+        },
+        {
+          "file": "docs/operations/acceptance-checklist.md",
+          "show": "excerpt",
+          "label": "Live acceptance checklist"
+        }
+      ],
+      "brain_may": [
+        "read_status",
+        "use_crease_mcp",
+        "dispatch_with_approval"
+      ],
+      "brain_never": [
+        "publish_without_approval",
+        "raise_cloud_spend_limits"
+      ]
+    },
+    {
+      "id": "lax-sixes",
+      "name": "Sixes lacrosse game (UE5)",
+      "repo": "epondboys-dot/lax-sixes",
+      "path": null,
+      "target_machine": "PA PC (builds), Florida PC (editor)",
+      "rules": [
+        "Never commit the local Visual Studio files .vsconfig and .slnx"
+      ],
+      "status": [
+        {
+          "file": "Lax Video Game/Docs/WO35_POSSESSION_LOOP.md",
+          "show": "excerpt",
+          "label": "Milestone 2 work order"
+        }
+      ],
+      "brain_may": [
+        "read_status",
+        "start_builds_with_approval"
+      ],
+      "brain_never": [
+        "force_push",
+        "delete_branches",
+        "commit_vs_local_files"
+      ],
+      "branch": "codex/exhibition-roster-adapters",
+      "milestones": "reference/sixes-milestones-2026-10-30.md",
+      "pending": "kept on the PA PC and Florida PC; not cloned to Jarvis (too large)"
+    }
+  ]
+}

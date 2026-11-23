@@ -1,0 +1,6 @@
+setup/*.sh text eol=lf
+jarvis-bot/*.sh text eol=lf
+jarvis-bot/*.js text eol=lf
+jarvis-brain/*.sh text eol=lf
+jarvis-brain/*.js text eol=lf
+jarvis-ollama/*.sh text eol=lf

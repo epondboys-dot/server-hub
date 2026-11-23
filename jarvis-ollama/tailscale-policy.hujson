@@ -1,0 +1,25 @@
+// Tailscale access policy for PondBoys' hub (written Nov 23, 2026).
+// Paste into login.tailscale.com > Access controls, replacing everything there.
+//
+// - Servers carry tags: jarvis = tag:hub, tradingserver = tag:trading.
+// - Your own devices (phone, PCs) can SSH into both servers.
+// - Jarvis can SSH into tradingserver (the Discord bot's status check and admin).
+// - tradingserver can reach nothing; nothing else is allowed.
+{
+  "tagOwners": {
+    "tag:hub":     ["autogroup:admin"],
+    "tag:trading": ["autogroup:admin"]
+  },
+
+  "grants": [
+    // Your personal devices -> both servers, SSH only
+    {"src": ["autogroup:member"], "dst": ["tag:hub", "tag:trading"], "ip": ["tcp:22"]},
+    // Jarvis -> tradingserver, SSH only
+    {"src": ["tag:hub"], "dst": ["tag:trading"], "ip": ["tcp:22"]}
+  ],
+
+  "tests": [
+    {"src": "tag:hub",     "accept": ["tag:trading:22"], "deny": ["tag:trading:80"]},
+    {"src": "tag:trading", "deny":   ["tag:hub:22", "tag:hub:11434"]}
+  ]
+}

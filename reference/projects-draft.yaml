@@ -1,0 +1,53 @@
+# Project registry for the Brain. Draft 0.1, October 29, 2026.
+# Florida PC paths shown; PA paths get added when the PA machines are set up.
+projects:
+  - id: trading-desk
+    name: AI Daytrading Bot (Trading Desk)
+    repo: epondboys-dot/ai-daytrading-bot
+    florida_path: D:\AI-Projects\ai-daytrading-bot
+    target_machine: 2014 Mac mini (Linux), PA
+    rules: [AGENTS.md, docs/OWNER_DECISIONS.md]
+    status_files: [docs/CODEX_NEXT.md, "docs/BUILD_STATUS_*.md"]
+    brain_may: [read_status, relay_alerts]
+    brain_never: [trade, clear_hard_off, reset_runtime, read_credentials]
+  - id: retro-game-platform
+    name: Retro Game Platform (mini-games platform)
+    repo: epondboys-dot/retro-game-platform
+    florida_path: D:\AI-Projects\retro-game-platform
+    target_machine: cloud server at public launch; dev on PA PC
+    rules: [AGENTS.md, PROJECT_BRIEF.md, BUILD_PLAN.md]
+    status_files: [HANDOFF.md, BUILD_PLAN.md]
+    brain_may: [read_status, run_tests, dispatch_with_approval]
+    brain_never: [public_deploy_without_approval, enable_payments]
+  - id: the-crease
+    name: The Crease (lacrosse content engine)
+    repo: epondboys-dot/the-crease
+    florida_path: D:\AI-Projects\the-crease
+    target_machine: new Mac mini (scheduling), PA PC (render worker)
+    rules: [README.md, "docs/handoff-*.md"]
+    status_files: ["docs/handoff-*.md"]
+    brain_may: [read_status, use_crease_mcp, dispatch_with_approval]
+    brain_never: [publish_without_approval, raise_cloud_spend_limits]
+  - id: lax-sixes
+    name: Sixes lacrosse game (UE5)
+    repo: epondboys-dot/lax-sixes
+    florida_path: E:\lax-sixes
+    target_machine: PA PC (builds), Florida PC (editor)
+    rules: [TBD]
+    status_files: [TBD]
+    brain_may: [read_status, start_builds_with_approval]
+    brain_never: [force_push, delete_branches]
+  - id: bridges
+    name: Bridges to Brilliance (website and BridgeMetric app)
+    repo: TBD (Base44 export pending)
+    florida_path: TBD
+    target_machine: new Mac mini (local copy and testing only)
+    rules: [server-hub/reference/BTB_Self-Hosting_Infrastructure_Plan.md]
+    status_files: [TBD]
+    brain_may: [work_on_sample_data]
+    brain_never: [touch_client_records, change_live_app]
+  - id: knee
+    name: Knee
+    repo: TBD
+    florida_path: C:\Users\Owner\OneDrive\Desktop\AI stuff\KNEE\Knee (not moved yet)
+    status: Open - include or leave out

@@ -1,0 +1,10 @@
+{
+  "name": "jarvis-bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Jarvis, the PA hub brain: Phase 1 private Discord channel (read-only).",
+  "main": "discord-bot.js",
+  "engines": { "node": ">=24" },
+  "scripts": { "check": "node --check discord-bot.js" },
+  "dependencies": { "discord.js": "^14.16.3" }
+}
