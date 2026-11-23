@@ -33,12 +33,12 @@ dscl . -read /Groups/admin GroupMembership 2>/dev/null | grep -qw "$AGENT_USER" 
 
 say "1. Code -> $APP (root-owned)"
 mkdir -p "$APP"
-install -m 644 "$SRC/discord-bot.js" "$SRC/tasks.js" "$SRC/package.json" "$APP/"
+install -m 644 "$SRC/discord-bot.js" "$SRC/tasks.js" "$SRC/desk.js" "$SRC/package.json" "$APP/"
 install -m 644 "$SRC/jarvis-bot.env.example" "$APP/"
 ( cd "$APP" && PATH="$(dirname "$NODE"):$PATH" "$NPM" install --omit=dev --no-audit --no-fund --loglevel=error )
 chown -R root:wheel "$APP"
 chmod -R go-w "$APP"
-"$NODE" --check "$APP/discord-bot.js" && "$NODE" --check "$APP/tasks.js" && echo "Code OK."
+"$NODE" --check "$APP/discord-bot.js" && "$NODE" --check "$APP/tasks.js" && "$NODE" --check "$APP/desk.js" && echo "Code OK."
 
 say "2. Settings file $ENV_FILE"
 if [ ! -f "$ENV_FILE" ]; then
@@ -47,6 +47,7 @@ if [ ! -f "$ENV_FILE" ]; then
 else
   chown "$AGENT_USER":staff "$ENV_FILE"; chmod 600 "$ENV_FILE"
   echo "Kept your existing settings (permissions re-checked)."
+  if ! grep -q '^DESK_SSH_HOST=' "$ENV_FILE"; then printf '\nDESK_SSH_HOST=100.111.197.47\n' >> "$ENV_FILE"; echo "Added DESK_SSH_HOST."; fi
   if ! grep -q '^CLAUDE_CODE_OAUTH_TOKEN=' "$ENV_FILE"; then
     printf '\n# Agent tasks: as jarvis run  claude setup-token  and paste the token here\nCLAUDE_CODE_OAUTH_TOKEN=\n' >> "$ENV_FILE"
     echo "Added a CLAUDE_CODE_OAUTH_TOKEN= line for agent tasks."

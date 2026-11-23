@@ -30,11 +30,18 @@ const TRADING_RULES = 'This is the Trading Desk repository. Follow AGENTS.md and
   'Never start, stop or move the desk; never touch a runtime folder, HARD_OFF.json or owner runtime files; ' +
   'never add order execution, live trading or a funded account; never put credentials anywhere.';
 
+const CREASE_NOTE = 'This is The Crease. Run its checks with crease-test (tests), crease-test lint and crease-test types; ' +
+  'they use the shared Python 3.12 environment. It is not deployed: never contact live services or add credentials.';
+
+const RETRO_NOTE = 'This is Rewind Arcade. Run its checks with retro-test (unit), retro-test build and retro-test browser. ' +
+  'Never deploy, never run the Deploy/Publish/Enable/Invite scripts, never contact the live store, Cloudflare or Supabase.';
+
 const PLAN_TOOLS = ['Read', 'Glob', 'Grep'];
 const PLAN_BLOCKED = ['Edit', 'Write', 'NotebookEdit', 'Bash'];
 const DO_TOOLS = ['Read', 'Glob', 'Grep', 'Edit', 'Write',
   'Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git add:*)', 'Bash(git commit:*)',
-  'Bash(node --test:*)', 'Bash(node --check:*)', 'Bash(npm test:*)', 'Bash(npm run test:*)'];
+  'Bash(node --test:*)', 'Bash(node --check:*)', 'Bash(npm test:*)', 'Bash(npm run test:*)',
+  'Bash(crease-test:*)', 'Bash(/Users/jarvis/bin/crease-test:*)', 'Bash(retro-test:*)', 'Bash(/Users/jarvis/bin/retro-test:*)'];
 const BLOCKED = ['Bash(git push:*)', 'Bash(git remote:*)', 'Bash(curl:*)', 'Bash(wget:*)', 'Bash(rm -rf:*)',
   'Bash(sudo:*)', 'WebFetch', 'WebSearch'];
 
@@ -139,6 +146,8 @@ async function handle(text, author, cfg, reply) {
       'You are planning a change for the owner, who will approve it from their phone.',
       'Read any AGENTS.md, CLAUDE.md and README first and follow their rules.',
       proj.repo === 'ai-daytrading-bot' ? TRADING_RULES : '',
+      proj.repo === 'the-crease' ? CREASE_NOTE : '',
+      proj.repo === 'retro-game-platform' ? RETRO_NOTE : '',
       'Do not change anything. Reply with: a one-line summary; numbered steps; the files you would change;',
       'the tests you would run; and any risks or questions. Keep it under 300 words, plain text.',
       `Request: ${request}`,
@@ -172,6 +181,8 @@ async function handle(text, author, cfg, reply) {
         'Carry out this plan, which the owner has approved. Stay within it; if something outside it is needed, stop and explain.',
         'Read any AGENTS.md, CLAUDE.md and README first and follow their rules, including their test and versioning steps.',
         t.repo === 'ai-daytrading-bot' ? TRADING_RULES : '',
+        t.repo === 'the-crease' ? CREASE_NOTE : '',
+        t.repo === 'retro-game-platform' ? RETRO_NOTE : '',
         'Run the project\'s tests if it has them. Commit your work to the current branch with a clear message if you can; if not, leave the changes and Jarvis will commit them. Never push or change git remotes.',
         'Finish with a short plain-text summary: what changed, test results, anything the owner should check.',
         `Original request: ${t.request}`,

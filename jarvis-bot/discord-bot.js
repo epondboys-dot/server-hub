@@ -11,6 +11,7 @@ const net = require('net');
 const { execFile } = require('child_process');
 const { Client, GatewayIntentBits, Partials, Events } = require('discord.js');
 const tasks = require('./tasks');
+const desk = require('./desk');
 
 // ---------- config ----------
 function loadEnv(file) {
@@ -166,7 +167,7 @@ const HELP = [
   '- `briefing`: the "Needs you" list from the latest daily briefing',
   '- `reset`: forget this conversation',
   '- anything else: ask the local AI (read-only, nothing leaves the hub)',
-].join('\n') + '\n\n' + tasks.USAGE;
+].join('\n') + '\n\n' + desk.USAGE + '\n\n' + tasks.USAGE;
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages,
@@ -205,6 +206,7 @@ client.on(Events.MessageCreate, async msg => {
     if (cmd === 'status') { await msg.channel.sendTyping(); return send(msg.channel, await statusText()); }
     if (cmd === 'briefing') return send(msg.channel, needsYou() || 'No briefing file found yet on this machine.');
     if (cmd === 'reset') { history.delete(msg.channelId); return send(msg.channel, 'Conversation cleared.'); }
+    if (desk.isDeskCommand(text)) { await msg.channel.sendTyping(); return desk.handle(text, msg.author.id, cfg, t => send(msg.channel, t)); }
     if (tasks.isTaskCommand(text)) {
       if (!cfg.CLAUDE_CODE_OAUTH_TOKEN && !/--?codex\b/i.test(text) && /^plan\b/i.test(text)) return send(msg.channel, 'Claude Code tasks are not set up yet: CLAUDE_CODE_OAUTH_TOKEN is missing from the settings file. Add `--codex` to use Codex.');
       return tasks.handle(text, msg.author.username, cfg, t => send(msg.channel, t));

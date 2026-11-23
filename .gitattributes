@@ -5,3 +5,5 @@ jarvis-brain/*.sh text eol=lf
 jarvis-brain/*.js text eol=lf
 jarvis-ollama/*.sh text eol=lf
 jarvis-crease/*.sh text eol=lf
+desk-remote/*.sh text eol=lf
+jarvis-retro/*.sh text eol=lf
