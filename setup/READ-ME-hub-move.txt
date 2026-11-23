@@ -1,0 +1,24 @@
+HUB MOVE KIT  (made November 23, 2026)
+======================================
+This folder holds private files (the Trading Desk's config.env with paper keys).
+Keep the drive with you. Delete this folder from the drive once the desk runs on tradingserver.
+
+WHAT'S HERE
+  TradingDesk-runtime-2026-11-23\   verified copy of the desk (from the PA PC runtime last used Oct 16).
+                                    Stopped state, entries disabled, 0 positions, no hard-off.
+                                    Its last run did not end cleanly: first start freezes for review.
+  install-desk-on-tradingserver.sh  gets the code, copies + verifies the runtime, runs the doctor. Never starts the desk.
+
+STEPS (Jarvis does the carrying; you only paste)
+  1. Plug this drive into Jarvis (the new Mac mini). It shows as "SSK Drive".
+  2. In Terminal on Jarvis (epondboys):
+       scp -r "/Volumes/SSK Drive/hub-move" epondboys@100.111.197.47:~/
+  3. Then:
+       ssh -t epondboys@100.111.197.47 'bash ~/hub-move/install-desk-on-tradingserver.sh'
+     When it asks: Username = epondboys-dot, Password = the new read-only GitHub token
+     (fine-grained, ai-daytrading-bot only, Contents: Read-only). Paste it; nothing shows.
+  4. Send Claude the end of the output. Start the desk together.
+
+NEVER
+  - start the desk from this drive's folder, or start the Florida PC copy again
+  - copy config.env anywhere else (chat, photos, Git, notes)
