@@ -191,7 +191,8 @@ async function homeChannel() {
 
 client.once(Events.ClientReady, async c => {
   console.log(`${new Date().toISOString()} Jarvis online as ${c.user.tag}; obeys ${owners.length} owner account(s)`);
-  try { await send(await homeChannel(), 'Jarvis is online. Type `help` for commands.'); } catch (e) {
+  const resumable = tasks.interruptedAtStart.length ? `\nInterrupted by the restart: ${tasks.interruptedAtStart.map(id => `**${id}**`).join(', ')}. Send \`approve <id>\` to run it again from a clean copy, or \`discard <id>\`.` : '';
+  try { await send(await homeChannel(), 'Jarvis is online. Type `help` for commands.' + resumable); } catch (e) {
     console.error('Could not post the online message:', e.message);
   }
 });

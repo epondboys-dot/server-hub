@@ -47,6 +47,11 @@ const BLOCKED = ['Bash(git push:*)', 'Bash(git remote:*)', 'Bash(curl:*)', 'Bash
 
 let state = { next: 1, tasks: {} };
 try { state = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch {}
+// A restart stops whatever was running: mark those tasks interrupted so they can be resumed.
+const interruptedAtStart = [];
+for (const t of Object.values(state.tasks || {})) {
+  if (t.status === 'working' || t.status === 'planning') { t.status = t.plan ? 'interrupted' : 'failed'; t.error = 'Jarvis restarted while this task was running'; interruptedAtStart.push(t.id); }
+}
 function save() {
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
@@ -202,7 +207,13 @@ async function handle(text, author, cfg, reply) {
   if (v === 'approve') {
     const t = state.tasks[String(rest[0] || '').toUpperCase()];
     if (!t) return reply('Usage: `approve <id>` (see `tasks`)');
-    if (t.status !== 'planned') return reply(`${t.id} is ${t.status}; only a planned task can be approved.`);
+    if (!['planned', 'interrupted'].includes(t.status)) return reply(`${t.id} is ${t.status}; only a planned or interrupted task can be approved.`);
+    if (t.status === 'interrupted') { // start the approved work over from a clean copy
+      const src0 = path.join(PROJECTS_DIR, t.repo);
+      try { git(src0, ['worktree', 'remove', '--force', path.join(WORK_DIR, t.id)]); } catch {}
+      try { git(src0, ['worktree', 'prune']); } catch {}
+      try { git(src0, ['branch', '-D', `jarvis/${t.id}`]); } catch {}
+    }
     if (running) return reply(`Busy with ${running.id}. Try again when it finishes.`);
     const src = path.join(PROJECTS_DIR, t.repo);
     const wt = path.join(WORK_DIR, t.id);
@@ -268,4 +279,4 @@ async function handle(text, author, cfg, reply) {
   return null; // not a task command
 }
 
-module.exports = { handle, USAGE, isTaskCommand: t => /^(plan|approve|cancel|discard|tasks|agents)\b/i.test(t.trim()) };
+module.exports = { handle, USAGE, interruptedAtStart, isTaskCommand: t => /^(plan|approve|cancel|discard|tasks|agents)\b/i.test(t.trim()) };
