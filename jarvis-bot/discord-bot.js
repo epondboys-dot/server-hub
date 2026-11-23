@@ -134,9 +134,14 @@ async function ask(key, question) {
   const h = history.get(key) || [];
   const messages = [{ role: 'system', content: SYSTEM }, ...h, { role: 'user', content: question }];
   const j = await ollama('/api/chat', {
-    model: cfg.OLLAMA_MODEL, messages, stream: false, think: false, options: { num_ctx: 8192 },
+    // think:true makes Ollama return the model's reasoning separately (message.thinking), which is discarded,
+    // so only the final answer reaches Discord. Belt and braces: drop anything up to a stray closing </think>.
+    model: cfg.OLLAMA_MODEL, messages, stream: false, think: true, options: { num_ctx: 8192 },
   });
-  const answer = String((j.message && j.message.content) || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+  let answer = String((j.message && j.message.content) || '');
+  const close = answer.lastIndexOf('</think>');
+  if (close !== -1) answer = answer.slice(close + '</think>'.length);
+  answer = answer.replace(/<think>[\s\S]*?(<\/think>|$)/g, '').trim();
   h.push({ role: 'user', content: question }, { role: 'assistant', content: answer });
   while (h.length > 12) h.shift();
   history.set(key, h);
@@ -207,6 +212,8 @@ client.on(Events.MessageCreate, async msg => {
     if (cmd === 'briefing') return send(msg.channel, needsYou() || 'No briefing file found yet on this machine.');
     if (cmd === 'reset') { history.delete(msg.channelId); return send(msg.channel, 'Conversation cleared.'); }
     if (desk.isDeskCommand(text)) { await msg.channel.sendTyping(); return desk.handle(text, msg.author.id, cfg, t => send(msg.channel, t)); }
+    const buried = /\b(approve|discard|cancel)\s+(T\d+)\b/i.exec(text);
+    if (buried && !tasks.isTaskCommand(text)) return send(msg.channel, `Did you mean \`${buried[1].toLowerCase()} ${buried[2].toUpperCase()}\`? Send it as its own message, nothing else, and I'll do it. New details belong in a fresh \`plan\`.`);
     if (tasks.isTaskCommand(text)) {
       if (!cfg.CLAUDE_CODE_OAUTH_TOKEN && !/--?codex\b/i.test(text) && /^plan\b/i.test(text)) return send(msg.channel, 'Claude Code tasks are not set up yet: CLAUDE_CODE_OAUTH_TOKEN is missing from the settings file. Add `--codex` to use Codex.');
       return tasks.handle(text, msg.author.username, cfg, t => send(msg.channel, t));
