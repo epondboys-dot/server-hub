@@ -72,6 +72,35 @@ async function runCodex(cfg, cwd, prompt, write, timeoutMs, id) {
   return last || stdout;
 }
 
+// ---- automatic agent choice ----
+// Owner, Nov 23: Jarvis picks the agent itself. Claude Code first (the stronger planner); Codex when Claude is
+// resting after hitting its usage limit, or as an automatic retry when Claude fails for that reason (and the reverse).
+// A word like --codex or --claude in the request still forces one. Plain questions go to the local model, not here.
+const LIMIT_RE = /usage limit|rate.?limit|limit reached|quota|too many requests|\b429\b|out of (credits|usage)|try again (in|at|later)/i;
+const COOLDOWN_MS = 3 * 60 * 60 * 1000;
+function restingUntil(agent) { return (state.resting && state.resting[agent]) || 0; }
+function rest(agent) { state.resting = state.resting || {}; state.resting[agent] = Date.now() + COOLDOWN_MS; save(); }
+function pickOrder(preferred) {
+  if (preferred) return [preferred];
+  const order = ['claude', 'codex'];
+  return order.sort((a, b) => (restingUntil(a) > Date.now()) - (restingUntil(b) > Date.now()));
+}
+const NAMES = { claude: 'Claude Code', codex: 'Codex' };
+async function runAuto(order, cfg, cwd, prompt, write, timeoutMs, id, note) {
+  let lastError;
+  for (const agent of order) {
+    try {
+      const out = await runAgent(agent, cfg, cwd, prompt, write, timeoutMs, id);
+      return { agent, out };
+    } catch (e) {
+      lastError = e;
+      if (LIMIT_RE.test(e.message)) { rest(agent); if (note) await note(`${NAMES[agent]} is at its usage limit; switching.`); continue; }
+      throw Object.assign(e, { agent });
+    }
+  }
+  throw lastError || new Error('No agent available');
+}
+
 function runAgent(agent, cfg, cwd, prompt, write, timeoutMs, id) {
   if (agent === 'codex') return runCodex(cfg, cwd, prompt, write, timeoutMs, id);
   const args = write
@@ -110,7 +139,7 @@ function short(s, n = 80) { s = String(s).replace(/\s+/g, ' ').trim(); return s.
 
 const USAGE = [
   '**Agent tasks** (Claude Code or Codex; nothing reaches GitHub without you)',
-  '- `plan <project> <what you want>`: read-only; replies with a plan and a task id. Add `--codex` to use Codex instead of Claude Code',
+  '- `plan <project> <what you want>`: read-only; replies with a plan and a task id. Jarvis picks Claude Code or Codex itself (switches when one hits its limit); add `--claude` or `--codex` to choose',
   '- `approve <id>`: carry out that plan in a separate copy on branch `jarvis/<id>`; commits there, never pushes',
   '- `tasks`: recent tasks · `cancel <id>`: stop a running task · `discard <id>`: delete its copy and branch',
   `- Projects: trading, retro, crease`,
@@ -120,6 +149,10 @@ async function handle(text, author, cfg, reply) {
   const [verb, ...rest] = text.trim().split(/\s+/);
   const v = verb.toLowerCase();
 
+  if (v === 'agents') {
+    return reply(['claude', 'codex'].map(a => `- ${NAMES[a]}: ${restingUntil(a) > Date.now() ? `resting until ${new Date(restingUntil(a)).toLocaleTimeString('en-US')}` : 'ready'}`).join('\n') +
+      '\n- Local model (Ollama): answers plain questions');
+  }
   if (v === 'tasks') {
     const list = Object.values(state.tasks).sort((a, b) => b.n - a.n).slice(0, 8);
     if (!list.length) return reply('No tasks yet.\n\n' + USAGE);
@@ -127,12 +160,14 @@ async function handle(text, author, cfg, reply) {
   }
 
   if (v === 'plan') {
-    let agent = 'claude';
+    let forced = null;
     const words = rest.filter(w => {
-      if (/^--?codex$/i.test(w)) { agent = 'codex'; return false; }
-      if (/^--?claude$/i.test(w)) { agent = 'claude'; return false; }
+      if (/^--?codex$/i.test(w)) { forced = 'codex'; return false; }
+      if (/^--?claude$/i.test(w)) { forced = 'claude'; return false; }
       return true;
     });
+    const order = pickOrder(forced);
+    let agent = order[0];
     const proj = resolveProject(words[0]);
     const request = words.slice(1).join(' ').trim();
     if (!proj || !request) return reply('Usage: `plan <trading|retro|crease> <what you want>`');
@@ -141,7 +176,7 @@ async function handle(text, author, cfg, reply) {
     const id = `T${n}`;
     const t = state.tasks[id] = { id, n, agent, repo: proj.repo, request, author, status: 'planning', created: new Date().toISOString() };
     save();
-    await reply(`**${id}** planning on ${proj.repo} with ${agent === 'codex' ? 'Codex' : 'Claude Code'} (read-only). This can take a few minutes.`);
+    await reply(`**${id}** planning on ${proj.repo} with ${NAMES[agent]}${forced ? '' : ' (picked automatically)'} (read-only). This can take a few minutes.`);
     const prompt = [
       'You are planning a change for the owner, who will approve it from their phone.',
       'Read any AGENTS.md, CLAUDE.md and README first and follow their rules.',
@@ -153,10 +188,11 @@ async function handle(text, author, cfg, reply) {
       `Request: ${request}`,
     ].filter(Boolean).join('\n');
     try {
-      t.plan = await runAgent(agent, cfg, proj.dir, prompt, false, 10 * 60 * 1000, id);
+      const res = await runAuto(order, cfg, proj.dir, prompt, false, 10 * 60 * 1000, id, reply);
+      agent = t.agent = res.agent; t.plan = res.out;
       t.status = 'planned';
       save();
-      return reply(`**${id} plan** (${proj.repo}, ${agent === 'codex' ? 'Codex' : 'Claude Code'})\n${t.plan}\n\nTo carry it out: \`approve ${id}\`. Nothing changes until then.`);
+      return reply(`**${id} plan** (${proj.repo}, ${NAMES[agent]})\n${t.plan}\n\nTo carry it out: \`approve ${id}\`. Nothing changes until then.`);
     } catch (e) {
       t.status = 'failed'; t.error = e.message; save();
       return reply(`**${id}** planning failed: ${e.message}`);
@@ -188,7 +224,9 @@ async function handle(text, author, cfg, reply) {
         `Original request: ${t.request}`,
         `Approved plan:\n${t.plan}`,
       ].filter(Boolean).join('\n');
-      t.summary = await runAgent(t.agent || 'claude', cfg, wt, prompt, true, 30 * 60 * 1000, t.id);
+      const first = t.agent || 'claude', other = first === 'claude' ? 'codex' : 'claude';
+      const res = await runAuto(restingUntil(first) > Date.now() ? [other, first] : [first, other], cfg, wt, prompt, true, 30 * 60 * 1000, t.id, reply);
+      t.doneBy = res.agent; t.summary = res.out;
       if (git(wt, ['status', '--porcelain'])) {
         git(wt, ['add', '-A']);
         git(wt, ['-c', 'user.name=Jarvis', '-c', 'user.email=jarvis@localhost', 'commit', '-q', '-m', `Jarvis ${t.id}: ${short(t.request, 60)}`]);
@@ -197,7 +235,7 @@ async function handle(text, author, cfg, reply) {
       const stat = git(wt, ['diff', '--stat', `${t.base}..HEAD`]) || '(no file changes)';
       t.status = 'done'; t.finished = new Date().toISOString(); save();
       return reply([
-        `**${t.id} done** (${t.repo}, branch \`${branch}\`)`, t.summary, '',
+        `**${t.id} done** (${t.repo}, ${NAMES[t.doneBy] || ''}, branch \`${branch}\`)`, t.summary, '',
         '```', log, stat.split('\n').slice(-12).join('\n'), '```',
         'Review and push it yourself from a PC:',
         '```', `git fetch epondboys@10.10.10.240:/Users/jarvis/work/${t.id} ${branch}:${branch}`, `git log -p ${t.base.slice(0, 7)}..${branch}`, `git push origin ${branch}`, '```',
@@ -230,4 +268,4 @@ async function handle(text, author, cfg, reply) {
   return null; // not a task command
 }
 
-module.exports = { handle, USAGE, isTaskCommand: t => /^(plan|approve|cancel|discard|tasks)\b/i.test(t.trim()) };
+module.exports = { handle, USAGE, isTaskCommand: t => /^(plan|approve|cancel|discard|tasks|agents)\b/i.test(t.trim()) };

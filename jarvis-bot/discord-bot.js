@@ -215,7 +215,6 @@ client.on(Events.MessageCreate, async msg => {
     const buried = /\b(approve|discard|cancel)\s+(T\d+)\b/i.exec(text);
     if (buried && !tasks.isTaskCommand(text)) return send(msg.channel, `Did you mean \`${buried[1].toLowerCase()} ${buried[2].toUpperCase()}\`? Send it as its own message, nothing else, and I'll do it. New details belong in a fresh \`plan\`.`);
     if (tasks.isTaskCommand(text)) {
-      if (!cfg.CLAUDE_CODE_OAUTH_TOKEN && !/--?codex\b/i.test(text) && /^plan\b/i.test(text)) return send(msg.channel, 'Claude Code tasks are not set up yet: CLAUDE_CODE_OAUTH_TOKEN is missing from the settings file. Add `--codex` to use Codex.');
       return tasks.handle(text, msg.author.username, cfg, t => send(msg.channel, t));
     }
     if (busy) return send(msg.channel, 'Still working on your last question, one moment.');
