@@ -81,7 +81,7 @@ async function runCodex(cfg, cwd, prompt, write, timeoutMs, id) {
 // Owner, Nov 23: Jarvis picks the agent itself. Claude Code first (the stronger planner); Codex when Claude is
 // resting after hitting its usage limit, or as an automatic retry when Claude fails for that reason (and the reverse).
 // A word like --codex or --claude in the request still forces one. Plain questions go to the local model, not here.
-const LIMIT_RE = /usage limit|rate.?limit|limit reached|quota|too many requests|\b429\b|out of (credits|usage)|try again (in|at|later)/i;
+const LIMIT_RE = /usage limit|rate.?limit|limit reached|hit your .{0,20}limit|limit\s*[·.,-]?\s*resets|quota|too many requests|\b429\b|out of (credits|usage)|try again (in|at|later)/i;
 const COOLDOWN_MS = 3 * 60 * 60 * 1000;
 function restingUntil(agent) { return (state.resting && state.resting[agent]) || 0; }
 function rest(agent) { state.resting = state.resting || {}; state.resting[agent] = Date.now() + COOLDOWN_MS; save(); }
