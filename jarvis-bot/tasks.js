@@ -63,6 +63,15 @@ function git(cwd, args) {
   return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
+// Bring the hub's copy up to date with GitHub before planning or working, so a task never starts from old code.
+// Fast-forward only: if the copy has local changes or has drifted, stop and say so instead of guessing.
+function refresh(src) {
+  git(src, ['fetch', '--quiet', 'origin']);
+  const head = git(src, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  git(src, ['merge', '--ff-only', '--quiet', `origin/${head}`]);
+  return git(src, ['log', '-1', '--format=%h %s']);
+}
+
 function runClaude(cfg, cwd, args, timeoutMs, id) {
   return runProc(cfg.CLAUDE_BIN || '/opt/homebrew/bin/claude', cfg, cwd, args, timeoutMs, id, 'Claude Code');
 }
@@ -179,7 +188,12 @@ async function handle(text, author, cfg, reply) {
     if (running) return reply(`Busy with ${running.id}. Try again when it finishes, or \`cancel ${running.id}\`.`);
     const n = state.next++;
     const id = `T${n}`;
-    const t = state.tasks[id] = { id, n, agent, repo: proj.repo, request, author, status: 'planning', created: new Date().toISOString() };
+    let latest;
+    try { latest = refresh(proj.dir); } catch (e) {
+      state.next--; save();
+      return reply(`Couldn't update ${proj.repo} from GitHub first, so I didn't plan: ${String(e.stderr || e.message).trim().slice(0, 300)}`);
+    }
+    const t = state.tasks[id] = { id, n, agent, repo: proj.repo, request, author, status: 'planning', created: new Date().toISOString(), plannedOn: latest };
     save();
     await reply(`**${id}** planning on ${proj.repo} with ${NAMES[agent]}${forced ? '' : ' (picked automatically)'} (read-only). This can take a few minutes.`);
     const prompt = [
@@ -222,6 +236,7 @@ async function handle(text, author, cfg, reply) {
     await reply(`**${t.id}** approved. Working in a separate copy on branch \`${branch}\`. This can take a while.`);
     try {
       fs.mkdirSync(WORK_DIR, { recursive: true });
+      refresh(src);
       t.base = git(src, ['rev-parse', 'HEAD']);
       git(src, ['worktree', 'add', '-b', branch, wt, t.base]);
       const prompt = [
