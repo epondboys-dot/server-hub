@@ -15,11 +15,13 @@
     // Your personal devices -> both servers, SSH only
     {"src": ["autogroup:member"], "dst": ["tag:hub", "tag:trading"], "ip": ["tcp:22"]},
     // Jarvis -> tradingserver, SSH only
-    {"src": ["tag:hub"], "dst": ["tag:trading"], "ip": ["tcp:22"]}
+    {"src": ["tag:hub"], "dst": ["tag:trading"], "ip": ["tcp:22"]},
+    // Your personal devices -> the desk's phone page on tradingserver (tailscale serve, HTTPS). Added Nov 24, 2026.
+    {"src": ["autogroup:member"], "dst": ["tag:trading"], "ip": ["tcp:443"]}
   ],
 
   "tests": [
-    {"src": "tag:hub",     "accept": ["tag:trading:22"], "deny": ["tag:trading:80"]},
+    {"src": "tag:hub",     "accept": ["tag:trading:22"], "deny": ["tag:trading:80", "tag:trading:443"]},
     {"src": "tag:trading", "deny":   ["tag:hub:22", "tag:hub:11434"]}
   ]
 }
