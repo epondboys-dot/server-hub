@@ -309,6 +309,7 @@ async function handle(text, author, cfg, reply, ctx = {}) {
     const request = words.slice(1).join(' ').trim();
     if (!proj || !request) return reply(`Usage: \`plan <${PROJECT_LIST}> <what you want>\``);
     const kind = v;
+    if (!ctx.live && ctx.liveFor) { try { ctx = { ...ctx, live: await ctx.liveFor(proj.repo) }; } catch {} }
     return exclusive(`a ${kind} on ${proj.repo}`, reply, async () => {
     const machine = proj.remote ? machineFor(proj.repo, cfg) : null;
     const n = state.next++;
@@ -328,6 +329,7 @@ async function handle(text, author, cfg, reply, ctx = {}) {
       'The owner asked a question about this project from their phone. Answer it by reading the project files.',
       'Read any AGENTS.md, CLAUDE.md and README first and follow their rules.',
       projectNote(proj.repo),
+      ctx.live ? `Live state right now (read-only snapshot Jarvis took a moment ago):\n${ctx.live}\nUse it for anything about the current state; the files only describe the design.` : '',
       'Do not change anything. Answer plainly in under 250 words, naming the files you relied on.',
       'End with one line starting "Suggested next step:" if there is an obvious one.',
       `Question: ${request}`,
@@ -475,22 +477,49 @@ function latestTask(channel, statuses, maxAgeMs = 6 * 3600 * 1000) {
     .sort((a, b) => b.n - a.n)[0] || null;
 }
 
-async function classify(text, cfg, history, focus, lastPlan) {
+// ---- learned phrasing (owner, Nov 25: "this is an evolving communication pattern ... we need to grow it") ----
+// Every correction ("no, I wanted a report") and every "when I say X, I mean Y" is kept in ~/hub/phrases.json and shown
+// to the router as examples; an exact repeat of a learned phrase skips the model entirely.
+const PHRASES_FILE = path.join(HOME, 'hub', 'phrases.json');
+function loadPhrases() { try { return JSON.parse(fs.readFileSync(PHRASES_FILE, 'utf8')); } catch { return []; } }
+function savePhrases(list) { fs.mkdirSync(path.dirname(PHRASES_FILE), { recursive: true }); fs.writeFileSync(PHRASES_FILE, JSON.stringify(list.slice(-200), null, 1)); }
+const norm = t => String(t).toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+function learnPhrase(text, route) {
+  const list = loadPhrases().filter(p => norm(p.text) !== norm(text));
+  list.push({ text: String(text).slice(0, 200), route: { intent: route.intent, action: route.action || null, project: route.project || null }, at: new Date().toISOString() });
+  savePhrases(list);
+}
+function describeRoute(r, actions) {
+  if (r.intent === 'action') return (actions[r.action] && actions[r.action].label) || r.action;
+  if (r.intent === 'look') return `an answer from the ${r.project || 'project'} files`;
+  if (r.intent === 'work') return `a plan for work on ${r.project || 'the project'}`;
+  return 'conversation';
+}
+const lastRoute = new Map(); // channel -> { text, route }
+
+async function classify(text, cfg, history, focus, lastPlan, actions = {}, prev = null) {
   const recent = (history || []).slice(-6).map(m => `${m.role === 'user' ? 'Owner' : 'Jarvis'}: ${short(m.content, 300)}`).join('\n');
   const sys = [
     'You route messages for Jarvis, the owner\'s hub assistant. Do not answer the message; only classify it.',
     'Projects: trading (AI trading desk: paper trading, market map, Alpaca), retro (Rewind Arcade, the retro/indie browser game platform and store),',
     'crease (The Crease lacrosse highlight video engine), x3 (X3 gym Discord admin bot), sixes (Sixes lacrosse video game in Unreal Engine),',
     'hub (the hub\'s own code: Jarvis himself, his commands, the self-updater, machine setup scripts, the PA PC worker).',
+    'intent "action": Jarvis can answer or do this himself right now, without an agent, using one of these (pick its name as "action"):',
+    ...Object.entries(actions).map(([k, a]) => `  ${k}: ${a.desc}`),
+    'Prefer "action" whenever the owner wants live, current information (what is running, open trades, positions, P&L, status, a link) or a report/summary that an action gives. Never use "work" for a report or a question.',
     'intent "work": the owner wants something done or decided in a project: build, add, fix, change, test, review, clean up, continue, "what\'s next", "keep going", "take a look and see what to do".',
     'intent "look": a question that needs reading a project\'s files or history to answer (how does X work, where is Y, what changed, what is the status of this project), with no request to change anything.',
     'intent "chat": anything else: general questions, greetings, opinions, questions about the hub machines, or announcing a topic with no request yet (e.g. "I want to work on retro" alone is chat, but it still names the project).',
     'project: the project it is about, using the conversation and the current focus for words like "it", "the project", "this"; "none" if unclear.',
     'revise: true only if the owner is changing or adding to the plan Jarvis just proposed instead of asking for something new.',
     'request: the owner\'s request restated as one self-contained sentence (resolve "it"/"that" from the conversation).',
-    'Answer JSON only: {"intent":"work|look|chat","project":"trading|retro|crease|x3|sixes|hub|none","revise":false,"request":"..."}',
+    'corrects_previous: true if the owner is saying Jarvis misunderstood the previous message (e.g. "no", "I don\'t want a task, I want a report", "I meant ...", "not that"); then classify what they actually want.',
+    'Answer JSON only: {"intent":"action|work|look|chat","action":"<name or none>","project":"trading|retro|crease|x3|sixes|hub|none","revise":false,"corrects_previous":false,"request":"..."}',
   ].join('\n');
-  const user = [`Current focus project: ${focus ? NAME_OF[focus] : 'none'}`,
+  const learned = loadPhrases().slice(-40).map(p => `"${p.text}" -> ${JSON.stringify(p.route)}`).join('\n');
+  const user = [learned ? `Phrases the owner has taught (follow these):\n${learned}` : '',
+    prev ? `Previous owner message: "${short(prev.text, 200)}", which Jarvis handled as: ${JSON.stringify(prev.route)}` : '',
+    `Current focus project: ${focus ? NAME_OF[focus] : 'none'}`,
     lastPlan ? `Plan Jarvis proposed most recently (${lastPlan.id}, ${NAME_OF[lastPlan.repo]}): ${short(lastPlan.plan, 500)}` : '',
     recent ? `Recent conversation:\n${recent}` : '', `New message: ${text}`].filter(Boolean).join('\n\n');
   const res = await fetch((cfg.OLLAMA_URL || 'http://127.0.0.1:11434') + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(120000),
@@ -498,8 +527,9 @@ async function classify(text, cfg, history, focus, lastPlan) {
       messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] }) });
   if (!res.ok) throw new Error(`Ollama answered HTTP ${res.status}`);
   const j = JSON.parse((await res.json()).message.content);
-  return { intent: ['work', 'look', 'chat'].includes(j.intent) ? j.intent : 'chat', project: PROJECTS[j.project] ? j.project : null,
-    revise: j.revise === true, request: String(j.request || text).trim() || text };
+  const intent = ['action', 'work', 'look', 'chat'].includes(j.intent) ? j.intent : 'chat';
+  return { intent: intent === 'action' && !actions[j.action] ? 'chat' : intent, action: actions[j.action] ? j.action : null, project: PROJECTS[j.project] ? j.project : null,
+    revise: j.revise === true, corrects: j.corrects_previous === true, request: String(j.request || text).trim() || text };
 }
 
 // Returns true when the message was handled here (an agent task was started, approved, stopped or queued);
@@ -540,16 +570,38 @@ async function converse(text, author, cfg, reply, ctx = {}) {
     return true;
   }
 
+  const actions = ctx.actions || {};
+  // "When I say X, (I mean|show me|give me|do) Y": learn it, then do it.
+  const teach = /^(?:when|if|whenever) i (?:say|ask(?: for)?|type)\s+["“']?(.+?)["”']?\s*,?\s*(?:i mean|that means|it means|show me|give me|do|run|send me|i want)\s+(.+)$/i.exec(t0);
+  if (teach) {
+    let r; try { r = await classify(teach[2], cfg, [], state.focus[channel], null, actions); } catch (e) { return false; }
+    if (r.intent === 'chat') { await reply(`I couldn't tie "${teach[2]}" to something I can do. Try naming a command, like \`desk report\` or \`status\`.`); return true; }
+    learnPhrase(teach[1], { ...r, project: r.project });
+    await reply(`Learned: "${teach[1]}" → ${describeRoute(r, actions)}. (\`phrases\` lists what I've learned.)`);
+    return true;
+  }
+  // Exact repeat of a learned phrase: no model needed.
+  const known = loadPhrases().find(p => norm(p.text) === norm(t0));
+
   // Cheap pre-check: is a project word in the message? Then it can set the focus even for chat.
   const words = t0.toLowerCase().match(/[a-z0-9-]+/g) || [];
   const named = words.map(w => PROJECTS[w]).find(Boolean);
   const focus = named || state.focus[channel] || null;
   const lastPlan = latestTask(channel, ['planned'], 2 * 3600 * 1000);
   let c;
-  try { c = await classify(t0, cfg, ctx.history, focus, lastPlan); } catch (e) { console.error('classify failed:', e.message); return false; }
-  const repo = PROJECTS[c.project] || focus;
+  const prev = lastRoute.get(channel) || null;
+  if (known) c = { ...known.route, project: known.route.project, revise: false, corrects: false, request: t0 };
+  else { try { c = await classify(t0, cfg, ctx.history, focus, lastPlan, actions, prev); } catch (e) { console.error('classify failed:', e.message); return false; } }
+  const repo = PROJECTS[c.project] || (c.intent === 'action' ? null : focus);
   if (repo) { state.focus[channel] = repo; save(); }
+  // A correction teaches the router what the previous message meant.
+  if (c.corrects && prev && Date.now() - prev.at < 10 * 60000 && c.intent !== 'chat' && JSON.stringify(prev.route) !== JSON.stringify({ intent: c.intent, action: c.action || null, project: c.project || null })) {
+    learnPhrase(prev.text, { intent: c.intent, action: c.action, project: c.project });
+    await reply(`Got it. Next time "${short(prev.text, 80)}" means ${describeRoute(c, actions)}. (\`phrases\` to review, \`forget phrase <n>\` if I got that wrong.)`);
+  }
+  lastRoute.set(channel, { at: Date.now(), text: t0, route: { intent: c.intent, action: c.action || null, project: c.project || null } });
   if (c.intent === 'chat') return false;
+  if (c.intent === 'action') { await actions[c.action].run(reply); return true; }
 
   if (!repo) {
     pendingAsk.set(channel, { kind: c.intent === 'look' ? 'look' : 'plan', request: c.request });
@@ -618,5 +670,5 @@ async function workerOp(op, cfg, timeoutMs = 10 * 60000) {
   catch (e) { return `PA PC ${op} skipped: ${e.message.slice(0, 200)}`; }
 }
 
-module.exports = { handle, converse, focusOf, whenIdle, busyLabel, workerOp, workStatus, USAGE, interruptedAtStart, nightlySixesCheckpoint, _test: { APPROVE_RE, PROJECTS, exclusive },
+module.exports = { loadPhrases, savePhrases, handle, converse, focusOf, whenIdle, busyLabel, workerOp, workStatus, USAGE, interruptedAtStart, nightlySixesCheckpoint, _test: { APPROVE_RE, PROJECTS, exclusive },
   isTaskCommand: t => new RegExp(`^look\\s+(${Object.keys(PROJECTS).join('|')})\\b`, 'i').test(t.trim()) || /^(plan|approve|cancel|discard|tasks|agents)\b|^work\s+on\b|^(build|push|checkpoint)\s+sixes$|^sixes\s+status$|^confirm\s+(build|push)$/i.test(t.trim()) };

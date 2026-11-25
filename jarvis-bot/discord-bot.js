@@ -227,6 +227,7 @@ const HELP = [
   '- `ask <question>`: answer from the hub\'s own knowledge base, with sources',
   '- `learn`: refresh the knowledge base now (it also learns every night at 02:30)',
   '- `knowledge`: what the knowledge base holds and when it last learned',
+  '- **Just ask for live things too**: "what trades are open?", "give me the desk page", "how\'s everything running?" get answered right away, no agent. If I get you wrong, tell me ("no, I wanted a report") and I learn it; or teach me: "when I say X, I mean Y". `phrases` lists what I\'ve learned',
   '- `updates`: version and what is new · `update` (Jarvis + X3) · `update tools` · `update desk` (asks first) · `update everything`. Nightly at 03:15 when idle',
   '- anything else: just talk. Work and questions about a project go to Claude Code or Codex; other questions to the local AI',
 ].join('\n') + '\n\n' + desk.USAGE + '\n\n' + tasks.USAGE;
@@ -264,9 +265,43 @@ client.on(Events.MessageCreate, async msg => {
   }
   const text = msg.content.replace(/<@!?\d+>/g, '').trim();
   if (!text) return;
+  return onText(msg, text);
+});
+
+// Things Jarvis can do himself, right away, when a plain message asks for them (the router picks one by its description).
+// Read-only only: anything that changes the desk or a machine still needs its exact command (and confirmation).
+function actionsFor(msg) {
+  const say = t => send(msg.channel, t);
+  const cmd = c => async () => onText(msg, c);
+  return {
+    desk_report: { label: 'the live desk report (open trades with P&L)', desc: 'live trading desk report: every open trade/position with cost, value and P&L, equity, today\'s P&L, pending orders, recent fills, whether entries are on. Use for any question about current trades, positions, profit or what the desk is doing.', run: cmd('desk report') },
+    desk_link: { label: 'the phone desk page link', desc: 'the link to the phone desk page / desk gateway / trading page on the phone', run: cmd('desk link') },
+    desk_control: { label: 'the exact desk command to send', desc: 'the owner wants to pause, resume, stop, start or restart the trading desk', run: async () => say('That changes the desk, so send the exact command: `pause desk` / `resume desk` (entries off/on), or `stop desk`, `restart desk`, `start desk` (each asks you to confirm).') },
+    hub_status: { label: 'the hub status', desc: 'how Jarvis, the machines and the agent work are doing right now; what is running or queued', run: cmd('status') },
+    agent_tasks: { label: 'the agent task list', desc: 'the list of agent tasks (T numbers) with their states and branches', run: cmd('tasks') },
+    updates: { label: 'the version and update check', desc: 'Jarvis\'s version, what is new on GitHub, the last update result', run: cmd('updates') },
+    knowledge: { label: 'the knowledge base summary', desc: 'what the local knowledge base holds and when it last learned', run: cmd('knowledge') },
+    briefing: { label: 'the briefing', desc: 'the daily briefing: what needs the owner\'s attention across projects', run: cmd('briefing') },
+    sixes_status: { label: 'the Sixes status on the PA PC', desc: 'the Sixes lacrosse game working folder on the PA PC: branch, changes, last backup', run: cmd('sixes status') },
+    phrases: { label: 'the learned phrases', desc: 'what phrases Jarvis has learned from the owner', run: cmd('phrases') },
+  };
+}
+
+async function onText(msg, text) {
   const cmd = text.toLowerCase();
   try {
     if (cmd === 'help') return send(msg.channel, HELP);
+    if (cmd === 'phrases') {
+      const list = tasks.loadPhrases();
+      return send(msg.channel, list.length ? `**Learned phrases** (\`forget phrase <n>\` removes one; teach one with "when I say X, I mean Y")\n${list.map((p, i) => `${i + 1}. "${p.text}" → ${p.route.intent === 'action' ? p.route.action : `${p.route.intent}${p.route.project ? ' ' + p.route.project : ''}`}`).join('\n')}` : 'No learned phrases yet. Teach one: "when I say open trades, I mean the desk report". I also learn when you correct me.');
+    }
+    const forget = /^forget phrase (\d+)$/.exec(cmd);
+    if (forget) {
+      const list = tasks.loadPhrases(); const i = +forget[1] - 1;
+      if (!list[i]) return send(msg.channel, 'No phrase with that number. Send `phrases` to see them.');
+      const [gone] = list.splice(i, 1); tasks.savePhrases(list);
+      return send(msg.channel, `Forgot "${gone.text}".`);
+    }
     if (cmd === 'status') { await msg.channel.sendTyping(); return send(msg.channel, await statusText()); }
     if (cmd === 'briefing') return send(msg.channel, needsYou() || 'No briefing file found yet on this machine.');
     if (cmd === 'reset') { history.delete(msg.channelId); return send(msg.channel, 'Conversation cleared.'); }
@@ -316,7 +351,9 @@ client.on(Events.MessageCreate, async msg => {
     // Replies from agent work are also remembered as conversation, so follow-ups ("change step 2", "go") make sense.
     const h = history.get(msg.channelId) || []; history.set(msg.channelId, h);
     const remember = (role, content) => { h.push({ role, content: String(content).slice(0, 1500) }); while (h.length > 12) h.shift(); };
-    const ctx = { channel: msg.channelId, history: h.slice() };
+    const ctx = { channel: msg.channelId, history: h.slice(), actions: actionsFor(msg),
+      // agents on the trading project get a live desk snapshot, so they answer from the desk, not old documents
+      liveFor: async repo => repo === 'ai-daytrading-bot' ? (await desk.liveReport(cfg)).text : null };
     const reply = t => { remember('assistant', t); return send(msg.channel, t); };
     if (tasks.isTaskCommand(text)) {
       remember('user', text);
@@ -338,7 +375,7 @@ client.on(Events.MessageCreate, async msg => {
     console.error(`${new Date().toISOString()} error:`, e.message);
     await send(msg.channel, `Sorry, that didn't work: ${e.message}`).catch(() => {});
   }
-});
+}
 
 // Daily morning post
 let lastPosted = '', lastBackup = '', lastUpdateDay = '';

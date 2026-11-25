@@ -1,7 +1,8 @@
 #!/bin/bash
 # tradingserver: the ONLY things Jarvis's desk key can run (owner decisions 12 and 13).
 # Installed as an SSH forced command, so whatever Jarvis asks for, this script decides:
-#   status   read-only summary          pause    paper entries off        resume   paper entries on
+#   status   read-only summary          report   read-only open positions, P&L, orders, recent fills
+#   pause    paper entries off          resume   paper entries on
 #   stop     full Stop (keeps running)  start    start the desk service   restart  restart the desk service
 # Never: clear hard-off, reset, change limits or keys, real money. Hard-off blocks start/restart.
 # Every request is logged to ~/trading-desk-runtime/jarvis-commands.log.
@@ -18,6 +19,7 @@ log "request: ${REQ:-<none>}"
 cd "$REPO" || { echo "desk code not found"; exit 1; }
 case "$REQ" in
   status)  desk summary ;;
+  report)  desk report ;;
   pause)   desk pause ;;
   resume)  desk resume ;;
   stop)    desk stop-trading ;;
@@ -26,5 +28,5 @@ case "$REQ" in
     systemctl --user "$REQ" trading-desk.service; rc=$?
     sleep 12; desk summary; log "$REQ exit $rc"; exit $rc ;;
   *)
-    log "refused: not allowed"; echo "REFUSED: this key can only run status, pause, resume, stop, start or restart."; exit 2 ;;
+    log "refused: not allowed"; echo "REFUSED: this key can only run status, report, pause, resume, stop, start or restart."; exit 2 ;;
 esac
