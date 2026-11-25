@@ -502,6 +502,18 @@ async function converse(text, author, cfg, reply, ctx = {}) {
     if (!t) return false;
     return handle(`approve ${t.id}`, author, cfg, reply, ctx).then(() => true);
   }
+  // "Go, and then ..." / "yes and also ...": approve the plan on the table first, then treat the rest as the next request
+  // (it waits in line behind the approved work).
+  const lead = /^(yes|yeah|yep|go|go ahead|do it|approve|approved|ok go|sounds good|lgtm)\b[\s,.!;:-]*(?:and|then|and then|also|after that|plus)\b[\s,]*(.+)$/is.exec(t0);
+  if (lead) {
+    const t = latestTask(channel, ['planned']);
+    if (t) {
+      const approved = handle(`approve ${t.id}`, author, cfg, reply, ctx); // starts now; the rest queues behind it
+      await converse(lead[2], author, cfg, reply, { ...ctx, history: [...(ctx.history || []), { role: 'assistant', content: `Approved ${t.id}: ${short(t.plan, 400)}` }] });
+      await approved;
+      return true;
+    }
+  }
   if (STOP_RE.test(t0) && busy()) {
     if (running) { running.child.kill('SIGTERM'); await reply(`Stopping ${running.id}.`); }
     else await reply(`${busy()} is between steps; send \`tasks\` to see it.`);
