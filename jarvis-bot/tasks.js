@@ -24,7 +24,18 @@ const PROJECTS = {
   trading: 'ai-daytrading-bot', 'trading-bot': 'ai-daytrading-bot', 'ai-daytrading-bot': 'ai-daytrading-bot', desk: 'ai-daytrading-bot',
   retro: 'retro-game-platform', arcade: 'retro-game-platform', 'retro-game-platform': 'retro-game-platform', rewind: 'retro-game-platform',
   crease: 'the-crease', 'the-crease': 'the-crease',
+  x3: 'x3-discord-admin-ai', 'x3-discord-admin-ai': 'x3-discord-admin-ai', gym: 'x3-discord-admin-ai',
+  sixes: 'lax-sixes', 'lax-sixes': 'lax-sixes', lax: 'lax-sixes', game: 'lax-sixes',
 };
+// Where each project's agents work. Anything not listed runs here on Jarvis (~/projects, ~/work).
+// Sixes stays on the PA PC (owner, Nov 23): Jarvis reaches it over the hub network with a key that can only run
+// the PA PC worker script (plan, do, discard). Builds and the Unreal editor are never run by agents.
+const REMOTE = { 'lax-sixes': 'pa-pc' };
+function machineFor(repo, cfg) {
+  if (REMOTE[repo] !== 'pa-pc') return null;
+  return { id: 'pa-pc', name: 'PA PC', host: cfg.PA_PC_HOST || '10.10.10.87', user: cfg.PA_PC_USER || 'ebutc',
+    key: path.join(HOME, '.ssh', 'jarvis_worker_ed25519') };
+}
 
 const TRADING_RULES = 'This is the Trading Desk repository. Follow AGENTS.md and docs/OWNER_DECISIONS.md strictly. ' +
   'Never start, stop or move the desk; never touch a runtime folder, HARD_OFF.json or owner runtime files; ' +
@@ -36,12 +47,24 @@ const CREASE_NOTE = 'This is The Crease. Run its checks with crease-test (tests)
 const RETRO_NOTE = 'This is Rewind Arcade. Run its checks with retro-test (unit), retro-test build and retro-test browser. ' +
   'Never deploy, never run the Deploy/Publish/Enable/Invite scripts, never contact the live store, Cloudflare or Supabase.';
 
+const X3_PY = '/Users/jarvis/projects/x3-discord-admin-ai/.venv/bin/python';
+const X3_NOTE = `This is the X3 Digital HQ Discord admin bot (Python). Run its tests with: ${X3_PY} -m unittest discover -s tests. ` +
+  'Never start the bot, never contact Discord or Gemini, never add or print tokens or keys.';
+const SIXES_NOTE = 'This is the Sixes lacrosse game (Unreal Engine 5) on the PA PC. Follow the project docs and work orders. ' +
+  'Never commit .vsconfig or .slnx. Never run Unreal builds, the editor, UAT, UBT or cooking: builds need the owner\'s separate approval. ' +
+  'Code and text changes only; say which build or pad test the owner should run to check them.';
+function projectNote(repo) {
+  return { 'ai-daytrading-bot': TRADING_RULES, 'the-crease': CREASE_NOTE, 'retro-game-platform': RETRO_NOTE,
+    'x3-discord-admin-ai': X3_NOTE, 'lax-sixes': SIXES_NOTE }[repo] || '';
+}
+
 const PLAN_TOOLS = ['Read', 'Glob', 'Grep'];
 const PLAN_BLOCKED = ['Edit', 'Write', 'NotebookEdit', 'Bash'];
 const DO_TOOLS = ['Read', 'Glob', 'Grep', 'Edit', 'Write',
   'Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git add:*)', 'Bash(git commit:*)',
   'Bash(node --test:*)', 'Bash(node --check:*)', 'Bash(npm test:*)', 'Bash(npm run test:*)',
-  'Bash(crease-test:*)', 'Bash(/Users/jarvis/bin/crease-test:*)', 'Bash(retro-test:*)', 'Bash(/Users/jarvis/bin/retro-test:*)'];
+  'Bash(crease-test:*)', 'Bash(/Users/jarvis/bin/crease-test:*)', 'Bash(retro-test:*)', 'Bash(/Users/jarvis/bin/retro-test:*)',
+  `Bash(${X3_PY} -m unittest:*)`];
 const BLOCKED = ['Bash(git push:*)', 'Bash(git remote:*)', 'Bash(curl:*)', 'Bash(wget:*)', 'Bash(rm -rf:*)',
   'Bash(sudo:*)', 'WebFetch', 'WebSearch'];
 
@@ -100,11 +123,11 @@ function pickOrder(preferred) {
   return order.sort((a, b) => (restingUntil(a) > Date.now()) - (restingUntil(b) > Date.now()));
 }
 const NAMES = { claude: 'Claude Code', codex: 'Codex' };
-async function runAuto(order, cfg, cwd, prompt, write, timeoutMs, id, note) {
+async function runAuto(order, cfg, cwd, prompt, write, timeoutMs, id, note, remote) {
   let lastError;
   for (const agent of order) {
     try {
-      const out = await runAgent(agent, cfg, cwd, prompt, write, timeoutMs, id);
+      const out = remote ? await runRemote(remote, agent, cfg, prompt, write, timeoutMs, id) : await runAgent(agent, cfg, cwd, prompt, write, timeoutMs, id);
       return { agent, out };
     } catch (e) {
       lastError = e;
@@ -123,11 +146,22 @@ function runAgent(agent, cfg, cwd, prompt, write, timeoutMs, id) {
   return runClaude(cfg, cwd, args, timeoutMs, id);
 }
 
-function runProc(bin, cfg, cwd, args, timeoutMs, id, label) {
+// Another machine: ssh with the worker key. That key can only run the worker script there, which takes
+// "<plan|do|discard> <task id> <repo> <agent>" and reads the prompt from stdin. No shell, no other commands.
+function sshArgs(m, command) {
+  return ['-i', m.key, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=30', '-o', 'StrictHostKeyChecking=accept-new', `${m.user}@${m.host}`, command];
+}
+function runRemote(m, agent, cfg, prompt, write, timeoutMs, id) {
+  const repo = state.tasks[id] ? state.tasks[id].repo : '';
+  return runProc('/usr/bin/ssh', cfg, HOME, sshArgs(m, `${write ? 'do' : 'plan'} ${id} ${repo} ${agent}`), timeoutMs, id, `${NAMES[agent]} on the ${m.name}`, prompt);
+}
+
+function runProc(bin, cfg, cwd, args, timeoutMs, id, label, input) {
   return new Promise((resolve, reject) => {
     const env = { ...process.env, HOME, PATH: '/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin' };
-    if (cfg.CLAUDE_CODE_OAUTH_TOKEN) env.CLAUDE_CODE_OAUTH_TOKEN = cfg.CLAUDE_CODE_OAUTH_TOKEN;
-    const child = spawn(bin, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    if (cfg.CLAUDE_CODE_OAUTH_TOKEN && bin !== '/usr/bin/ssh') env.CLAUDE_CODE_OAUTH_TOKEN = cfg.CLAUDE_CODE_OAUTH_TOKEN;
+    const child = spawn(bin, args, { cwd, env, stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
+    if (input !== undefined) { child.stdin.on('error', () => {}); child.stdin.end(input); }
     running = { id, child };
     let out = '', err = '';
     child.stdout.on('data', d => { out += d; });
@@ -145,23 +179,52 @@ function runProc(bin, cfg, cwd, args, timeoutMs, id, label) {
 function resolveProject(word) {
   const repo = PROJECTS[String(word || '').toLowerCase()];
   if (!repo) return null;
+  if (REMOTE[repo]) return { repo, remote: REMOTE[repo], dir: HOME };
   const dir = path.join(PROJECTS_DIR, repo);
   return fs.existsSync(path.join(dir, '.git')) ? { repo, dir } : null;
 }
 
 function short(s, n = 80) { s = String(s).replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
 
+const PROJECT_LIST = 'trading|retro|crease|x3|sixes';
 const USAGE = [
   '**Agent tasks** (Claude Code or Codex; nothing reaches GitHub without you)',
+  '- `work on <anything>`: say it in plain words; Jarvis works out the project and machine and starts a read-only plan',
   '- `plan <project> <what you want>`: read-only; replies with a plan and a task id. Jarvis picks Claude Code or Codex itself (switches when one hits its limit); add `--claude` or `--codex` to choose',
   '- `approve <id>`: carry out that plan in a separate copy on branch `jarvis/<id>`; commits there, never pushes',
   '- `tasks`: recent tasks · `cancel <id>`: stop a running task · `discard <id>`: delete its copy and branch',
-  `- Projects: trading, retro, crease`,
+  '- Projects: trading, retro, crease, x3 (on Jarvis) · sixes (on the PA PC; agents never run builds)',
 ].join('\n');
+
+// "work on <plain words>": find the project (a project word in the text first, else the local model picks from the
+// list), then start an ordinary read-only plan there. The model only chooses a project name; it cannot run anything.
+async function routeProject(text, cfg) {
+  const words = text.toLowerCase().match(/[a-z0-9-]+/g) || [];
+  const named = words.map(w => PROJECTS[w]).find(Boolean);
+  if (named) return Object.keys(PROJECTS).find(k => PROJECTS[k] === named);
+  try {
+    const res = await fetch((cfg.OLLAMA_URL || 'http://127.0.0.1:11434') + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(120000),
+      body: JSON.stringify({ model: cfg.OLLAMA_MODEL || 'qwen3:30b', stream: false, think: false, format: 'json', options: { temperature: 0 },
+        messages: [{ role: 'system', content: 'Pick which project a request is about. Projects: trading (AI trading desk, paper trading, market map, Alpaca), retro (Rewind Arcade browser game store), crease (The Crease lacrosse highlight video engine), x3 (X3 gym Discord admin bot), sixes (Sixes lacrosse video game in Unreal Engine). Answer JSON {"project": "<one of trading|retro|crease|x3|sixes|none>"}.' },
+          { role: 'user', content: text }] }) });
+    const p = JSON.parse((await res.json()).message.content).project;
+    return PROJECTS[p] ? p : null;
+  } catch { return null; }
+}
 
 async function handle(text, author, cfg, reply) {
   const [verb, ...rest] = text.trim().split(/\s+/);
   const v = verb.toLowerCase();
+
+  if (v === 'work' && (rest[0] || '').toLowerCase() === 'on') {
+    const request = rest.slice(1).join(' ').trim();
+    if (!request) return reply('Tell me what to work on, e.g. `work on the x3 bot: add a channel for speed tests`');
+    const p = await routeProject(request, cfg);
+    if (!p) return reply(`I couldn't tell which project that is. Send \`plan <${PROJECT_LIST}> ${short(request, 60)}\`.`);
+    const where = REMOTE[PROJECTS[p]] ? 'the PA PC' : 'Jarvis';
+    await reply(`That's **${p}** (${PROJECTS[p]}, runs on ${where}). Starting a read-only plan; nothing changes until you approve it.`);
+    return handle(`plan ${p} ${request}`, author, cfg, reply);
+  }
 
   if (v === 'agents') {
     return reply(['claude', 'codex'].map(a => `- ${NAMES[a]}: ${restingUntil(a) > Date.now() ? `resting until ${new Date(restingUntil(a)).toLocaleTimeString('en-US')}` : 'ready'}`).join('\n') +
@@ -184,30 +247,31 @@ async function handle(text, author, cfg, reply) {
     let agent = order[0];
     const proj = resolveProject(words[0]);
     const request = words.slice(1).join(' ').trim();
-    if (!proj || !request) return reply('Usage: `plan <trading|retro|crease> <what you want>`');
+    if (!proj || !request) return reply(`Usage: \`plan <${PROJECT_LIST}> <what you want>\``);
     if (running) return reply(`Busy with ${running.id}. Try again when it finishes, or \`cancel ${running.id}\`.`);
+    const machine = proj.remote ? machineFor(proj.repo, cfg) : null;
     const n = state.next++;
     const id = `T${n}`;
-    let latest;
-    try { latest = refresh(proj.dir); } catch (e) {
-      state.next--; save();
-      return reply(`Couldn't update ${proj.repo} from GitHub first, so I didn't plan: ${String(e.stderr || e.message).trim().slice(0, 300)}`);
+    let latest = machine ? `latest on the ${machine.name}` : null;
+    if (!machine) {
+      try { latest = refresh(proj.dir); } catch (e) {
+        state.next--; save();
+        return reply(`Couldn't update ${proj.repo} from GitHub first, so I didn't plan: ${String(e.stderr || e.message).trim().slice(0, 300)}`);
+      }
     }
-    const t = state.tasks[id] = { id, n, agent, repo: proj.repo, request, author, status: 'planning', created: new Date().toISOString(), plannedOn: latest };
+    const t = state.tasks[id] = { id, n, agent, repo: proj.repo, machine: machine ? machine.id : 'jarvis', request, author, status: 'planning', created: new Date().toISOString(), plannedOn: latest };
     save();
-    await reply(`**${id}** planning on ${proj.repo} with ${NAMES[agent]}${forced ? '' : ' (picked automatically)'} (read-only). This can take a few minutes.`);
+    await reply(`**${id}** planning on ${proj.repo}${machine ? ` (on the ${machine.name})` : ''} with ${NAMES[agent]}${forced ? '' : ' (picked automatically)'} (read-only). This can take a few minutes.`);
     const prompt = [
       'You are planning a change for the owner, who will approve it from their phone.',
       'Read any AGENTS.md, CLAUDE.md and README first and follow their rules.',
-      proj.repo === 'ai-daytrading-bot' ? TRADING_RULES : '',
-      proj.repo === 'the-crease' ? CREASE_NOTE : '',
-      proj.repo === 'retro-game-platform' ? RETRO_NOTE : '',
+      projectNote(proj.repo),
       'Do not change anything. Reply with: a one-line summary; numbered steps; the files you would change;',
       'the tests you would run; and any risks or questions. Keep it under 300 words, plain text.',
       `Request: ${request}`,
     ].filter(Boolean).join('\n');
     try {
-      const res = await runAuto(order, cfg, proj.dir, prompt, false, 10 * 60 * 1000, id, reply);
+      const res = await runAuto(order, cfg, proj.dir, prompt, false, 10 * 60 * 1000, id, reply, machine);
       agent = t.agent = res.agent; t.plan = res.out;
       t.status = 'planned';
       save();
@@ -229,6 +293,28 @@ async function handle(text, author, cfg, reply) {
       try { git(src0, ['branch', '-D', `jarvis/${t.id}`]); } catch {}
     }
     if (running) return reply(`Busy with ${running.id}. Try again when it finishes.`);
+    const machine = machineFor(t.repo, cfg);
+    if (machine) {
+      // The worker on that machine makes the separate copy (branch jarvis/<id>), runs the agent and commits there.
+      t.status = 'working'; t.approvedBy = author; t.approved = new Date().toISOString(); save();
+      await reply(`**${t.id}** approved. Working on the ${machine.name} in a separate copy on branch \`jarvis/${t.id}\`. This can take a while.`);
+      const prompt = ['Carry out this plan, which the owner has approved. Stay within it; if something outside it is needed, stop and explain.',
+        'Read any AGENTS.md, CLAUDE.md and README first and follow their rules.', projectNote(t.repo),
+        'Commit your work to the current branch with a clear message. Never push or change git remotes.',
+        'Finish with a short plain-text summary: what changed, anything the owner should check or build.',
+        `Original request: ${t.request}`, `Approved plan:\n${t.plan}`].filter(Boolean).join('\n');
+      try {
+        const first = t.agent || 'claude', other = first === 'claude' ? 'codex' : 'claude';
+        const res = await runAuto(restingUntil(first) > Date.now() ? [other, first] : [first, other], cfg, HOME, prompt, true, 45 * 60 * 1000, t.id, reply, machine);
+        t.doneBy = res.agent; t.summary = res.out; t.status = 'done'; t.finished = new Date().toISOString(); save();
+        return reply([`**${t.id} done** on the ${machine.name} (${t.repo}, ${NAMES[t.doneBy] || ''}, branch \`jarvis/${t.id}\`)`, t.summary, '',
+          `Review it on the ${machine.name}, in the project folder:`, '```', `git log -p HEAD..jarvis/${t.id}`, `git push origin jarvis/${t.id}`, '```',
+          `Builds are yours to run after review. Or \`discard ${t.id}\` to throw it away.`].join('\n'));
+      } catch (e) {
+        t.status = 'failed'; t.error = e.message; save();
+        return reply(`**${t.id}** stopped on the ${machine.name}: ${e.message}\n\`discard ${t.id}\` removes its copy there.`);
+      }
+    }
     const src = path.join(PROJECTS_DIR, t.repo);
     const wt = path.join(WORK_DIR, t.id);
     const branch = `jarvis/${t.id}`;
@@ -242,9 +328,7 @@ async function handle(text, author, cfg, reply) {
       const prompt = [
         'Carry out this plan, which the owner has approved. Stay within it; if something outside it is needed, stop and explain.',
         'Read any AGENTS.md, CLAUDE.md and README first and follow their rules, including their test and versioning steps.',
-        t.repo === 'ai-daytrading-bot' ? TRADING_RULES : '',
-        t.repo === 'the-crease' ? CREASE_NOTE : '',
-        t.repo === 'retro-game-platform' ? RETRO_NOTE : '',
+        projectNote(t.repo),
         'Run the project\'s tests if it has them. Commit your work to the current branch with a clear message if you can; if not, leave the changes and Jarvis will commit them. Never push or change git remotes.',
         'Finish with a short plain-text summary: what changed, test results, anything the owner should check.',
         `Original request: ${t.request}`,
@@ -284,6 +368,13 @@ async function handle(text, author, cfg, reply) {
     const t = state.tasks[String(rest[0] || '').toUpperCase()];
     if (!t) return reply('Usage: `discard <id>`');
     if (running && running.id === t.id) return reply(`${t.id} is running; \`cancel ${t.id}\` first.`);
+    const machine = machineFor(t.repo, cfg);
+    if (machine) {
+      try { await runProc('/usr/bin/ssh', cfg, HOME, sshArgs(machine, `discard ${t.id} ${t.repo} -`), 60000, `discard-${t.id}`, `the ${machine.name} worker`, ''); }
+      catch (e) { return reply(`Couldn't reach the ${machine.name} to discard ${t.id}: ${e.message}`); }
+      t.status = 'discarded'; save();
+      return reply(`${t.id} discarded on the ${machine.name}.`);
+    }
     const src = path.join(PROJECTS_DIR, t.repo);
     try { git(src, ['worktree', 'remove', '--force', path.join(WORK_DIR, t.id)]); } catch {}
     try { git(src, ['branch', '-D', `jarvis/${t.id}`]); } catch {}
@@ -294,4 +385,4 @@ async function handle(text, author, cfg, reply) {
   return null; // not a task command
 }
 
-module.exports = { handle, USAGE, interruptedAtStart, isTaskCommand: t => /^(plan|approve|cancel|discard|tasks|agents)\b/i.test(t.trim()) };
+module.exports = { handle, USAGE, interruptedAtStart, isTaskCommand: t => /^(plan|approve|cancel|discard|tasks|agents)\b|^work\s+on\b/i.test(t.trim()) };
