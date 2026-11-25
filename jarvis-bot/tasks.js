@@ -25,7 +25,8 @@ const PROJECTS = {
   retro: 'retro-game-platform', arcade: 'retro-game-platform', 'retro-game-platform': 'retro-game-platform', rewind: 'retro-game-platform',
   crease: 'the-crease', 'the-crease': 'the-crease',
   x3: 'x3-discord-admin-ai', 'x3-discord-admin-ai': 'x3-discord-admin-ai', gym: 'x3-discord-admin-ai',
-  sixes: 'lax-sixes', 'lax-sixes': 'lax-sixes', lax: 'lax-sixes', game: 'lax-sixes',
+  sixes: 'lax-sixes', 'lax-sixes': 'lax-sixes', lax: 'lax-sixes', lacrosse: 'lax-sixes', unreal: 'lax-sixes',
+  'rewind-arcade': 'retro-game-platform', platform: 'retro-game-platform', 'trading-desk': 'ai-daytrading-bot',
 };
 // Where each project's agents work. Anything not listed runs here on Jarvis (~/projects, ~/work).
 // Sixes stays on the PA PC (owner, Nov 23): Jarvis reaches it over the hub network with a key that can only run
@@ -82,6 +83,23 @@ function save() {
 }
 
 let running = null; // { id, child }
+// One agent job at a time. Anything asked for while one runs waits in a queue and starts by itself afterwards,
+// so a new message never stops or disturbs the job in progress.
+let active = null; // label of the job in progress (covers the gaps between agent processes)
+const queue = [];
+const busy = () => active || (running && running.id);
+async function exclusive(label, reply, fn) {
+  if (busy()) {
+    queue.push({ label, reply, fn });
+    return reply(`Queued (#${queue.length}) behind ${busy()}. I'll start it by myself when that finishes.`);
+  }
+  active = label;
+  try { return await fn(); } finally {
+    active = null;
+    const next = queue.shift();
+    if (next) setImmediate(() => exclusive(next.label, next.reply, next.fn).catch(e => next.reply(`Queued job failed: ${e.message}`)));
+  }
+}
 const pendingConfirm = new Map(); // owner -> { action: 'build'|'push', at }
 
 function git(cwd, args) {
@@ -191,7 +209,8 @@ function short(s, n = 80) { s = String(s).replace(/\s+/g, ' ').trim(); return s.
 const PROJECT_LIST = 'trading|retro|crease|x3|sixes';
 const USAGE = [
   '**Agent tasks** (Claude Code or Codex; nothing reaches GitHub without you)',
-  '- `work on <anything>`: say it in plain words; Jarvis works out the project and machine and starts a read-only plan',
+  '- **Just talk to me.** "what\'s next on retro", "fix the login bug in x3", "take a look at the project": I work out the project (and remember it for follow-ups), read it with Claude Code or Codex, and bring back a plan. Say `go` to carry it out, or tell me what to change. Questions about a project ("how does scoring work in sixes?") get an answer from the files. Anything new while an agent works waits in line; nothing gets interrupted. `stop` stops the running job.',
+  '- `work on <anything>` / `look <project> <question>`: the same, spelled out',
   '- `plan <project> <what you want>`: read-only; replies with a plan and a task id. Jarvis picks Claude Code or Codex itself (switches when one hits its limit); add `--claude` or `--codex` to choose',
   '- `approve <id>`: carry out that plan in a separate copy on branch `jarvis/<id>`; commits there, never pushes',
   '- `tasks`: recent tasks · `cancel <id>`: stop a running task · `discard <id>`: delete its copy and branch',
@@ -215,7 +234,7 @@ async function routeProject(text, cfg) {
   } catch { return null; }
 }
 
-async function handle(text, author, cfg, reply) {
+async function handle(text, author, cfg, reply, ctx = {}) {
   const [verb, ...rest] = text.trim().split(/\s+/);
   const v = verb.toLowerCase();
 
@@ -226,7 +245,7 @@ async function handle(text, author, cfg, reply) {
     if (!p) return reply(`I couldn't tell which project that is. Send \`plan <${PROJECT_LIST}> ${short(request, 60)}\`.`);
     const where = REMOTE[PROJECTS[p]] ? 'the PA PC' : 'Jarvis';
     await reply(`That's **${p}** (${PROJECTS[p]}, runs on ${where}). Starting a read-only plan; nothing changes until you approve it.`);
-    return handle(`plan ${p} ${request}`, author, cfg, reply);
+    return handle(`plan ${p} ${request}`, author, cfg, reply, ctx);
   }
 
   // ---- Sixes on the PA PC: status, backups, builds, pushes (owner, Nov 25: as automated as possible) ----
@@ -236,7 +255,7 @@ async function handle(text, author, cfg, reply) {
   if (sixesOp) {
     const m = machineFor('lax-sixes', cfg);
     const run = async (op, timeoutMs) => {
-      if (running) return reply(`Busy with ${running.id}. Try again when it finishes.`);
+      if (busy()) return reply(`Busy with ${busy()}. Try again when it finishes.`);
       try { return reply(await runProc('/usr/bin/ssh', cfg, HOME, sshArgs(m, `${op} T0 lax-sixes -`), timeoutMs, `sixes-${op}`, `the ${m.name} worker`, '')); }
       catch (e) { return reply(`Sixes ${op} on the ${m.name}: ${e.message}`); }
     };
@@ -260,12 +279,13 @@ async function handle(text, author, cfg, reply) {
       '\n- Local model (Ollama): answers plain questions');
   }
   if (v === 'tasks') {
+    if (queue.length) await reply(`Waiting in line: ${queue.map(q => q.label).join(', ')}`);
     const list = Object.values(state.tasks).sort((a, b) => b.n - a.n).slice(0, 8);
     if (!list.length) return reply('No tasks yet.\n\n' + USAGE);
     return reply(list.map(t => `- **${t.id}** [${t.status}] ${t.agent || 'claude'} · ${t.repo}: ${short(t.request)}`).join('\n'));
   }
 
-  if (v === 'plan') {
+  if (v === 'plan' || v === 'look') {
     let forced = null;
     const words = rest.filter(w => {
       if (/^--?codex$/i.test(w)) { forced = 'codex'; return false; }
@@ -277,7 +297,8 @@ async function handle(text, author, cfg, reply) {
     const proj = resolveProject(words[0]);
     const request = words.slice(1).join(' ').trim();
     if (!proj || !request) return reply(`Usage: \`plan <${PROJECT_LIST}> <what you want>\``);
-    if (running) return reply(`Busy with ${running.id}. Try again when it finishes, or \`cancel ${running.id}\`.`);
+    const kind = v;
+    return exclusive(`a ${kind} on ${proj.repo}`, reply, async () => {
     const machine = proj.remote ? machineFor(proj.repo, cfg) : null;
     const n = state.next++;
     const id = `T${n}`;
@@ -288,13 +309,24 @@ async function handle(text, author, cfg, reply) {
         return reply(`Couldn't update ${proj.repo} from GitHub first, so I didn't plan: ${String(e.stderr || e.message).trim().slice(0, 300)}`);
       }
     }
-    const t = state.tasks[id] = { id, n, agent, repo: proj.repo, machine: machine ? machine.id : 'jarvis', request, author, status: 'planning', created: new Date().toISOString(), plannedOn: latest };
+    const t = state.tasks[id] = { id, n, agent, kind, repo: proj.repo, machine: machine ? machine.id : 'jarvis', request, author, channel: ctx.channel || null, status: 'planning', created: new Date().toISOString(), plannedOn: latest };
+    if (ctx.channel) { state.focus = state.focus || {}; state.focus[ctx.channel] = proj.repo; }
     save();
-    await reply(`**${id}** planning on ${proj.repo}${machine ? ` (on the ${machine.name})` : ''} with ${NAMES[agent]}${forced ? '' : ' (picked automatically)'} (read-only). This can take a few minutes.`);
-    const prompt = [
+    await reply(`**${id}** ${kind === 'look' ? 'looking into' : 'planning on'} ${proj.repo}${machine ? ` (on the ${machine.name})` : ''} with ${NAMES[agent]}${forced ? '' : ' (picked automatically)'} (read-only). This can take a few minutes.`);
+    const prompt = kind === 'look' ? [
+      'The owner asked a question about this project from their phone. Answer it by reading the project files.',
+      'Read any AGENTS.md, CLAUDE.md and README first and follow their rules.',
+      projectNote(proj.repo),
+      'Do not change anything. Answer plainly in under 250 words, naming the files you relied on.',
+      'End with one line starting "Suggested next step:" if there is an obvious one.',
+      `Question: ${request}`,
+    ].filter(Boolean).join('\n') : [
       'You are planning a change for the owner, who will approve it from their phone.',
       'Read any AGENTS.md, CLAUDE.md and README first and follow their rules.',
       projectNote(proj.repo),
+      'If the request is open-ended (for example "what is next" or "keep going"), first read the project\'s status, plan,',
+      'handoff and work-order documents and recent commits, say in two lines where the project stands, then plan the single most',
+      'valuable next step that can be done safely without the owner at the keyboard.',
       'Do not change anything. Reply with: a one-line summary; numbered steps; the files you would change;',
       'the tests you would run; and any risks or questions. Keep it under 300 words, plain text.',
       `Request: ${request}`,
@@ -302,13 +334,15 @@ async function handle(text, author, cfg, reply) {
     try {
       const res = await runAuto(order, cfg, proj.dir, prompt, false, 10 * 60 * 1000, id, reply, machine);
       agent = t.agent = res.agent; t.plan = res.out;
-      t.status = 'planned';
+      t.status = kind === 'look' ? 'answered' : 'planned';
       save();
-      return reply(`**${id} plan** (${proj.repo}, ${NAMES[agent]})\n${t.plan}\n\nTo carry it out: \`approve ${id}\`. Nothing changes until then.`);
+      if (kind === 'look') return reply(`**${id}** (${proj.repo}, ${NAMES[agent]})\n${t.plan}\n\nTell me what you'd like done next and I'll plan it.`);
+      return reply(`**${id} plan** (${proj.repo}, ${NAMES[agent]})\n${t.plan}\n\nTo carry it out say \`go\` (or \`approve ${id}\`). To change it, just tell me what to change. Nothing changes until then.`);
     } catch (e) {
       t.status = 'failed'; t.error = e.message; save();
-      return reply(`**${id}** planning failed: ${e.message}`);
+      return reply(`**${id}** ${kind === 'look' ? 'lookup' : 'planning'} failed: ${e.message}`);
     }
+    });
   }
 
   if (v === 'approve') {
@@ -321,7 +355,9 @@ async function handle(text, author, cfg, reply) {
       try { git(src0, ['worktree', 'prune']); } catch {}
       try { git(src0, ['branch', '-D', `jarvis/${t.id}`]); } catch {}
     }
-    if (running) return reply(`Busy with ${running.id}. Try again when it finishes.`);
+    if (t.queued) return reply(`${t.id} is already queued.`);
+    t.queued = true;
+    return exclusive(`${t.id}`, reply, async () => { t.queued = false;
     const machine = machineFor(t.repo, cfg);
     if (machine) {
       // The worker on that machine makes the separate copy (branch jarvis/<id>), runs the agent and commits there.
@@ -383,6 +419,7 @@ async function handle(text, author, cfg, reply) {
       t.status = 'failed'; t.error = e.message; save();
       return reply(`**${t.id}** stopped: ${e.message}\nThe copy is kept at ~/work/${t.id}; \`discard ${t.id}\` removes it.`);
     }
+    });
   }
 
   if (v === 'cancel') {
@@ -413,12 +450,108 @@ async function handle(text, author, cfg, reply) {
   return null; // not a task command
 }
 
+// ---- plain-language messages (owner, Nov 25: "I need to be able to do actions like this across all the projects") ----
+// Every message that is not an exact command comes here first. The local model only classifies it (work / look / chat,
+// which project); it cannot run anything. Work and look start the same read-only agent runs as `plan`, so nothing
+// changes until the owner says go. Approval is never decided by the model: only an owner's plain yes/go counts.
+const APPROVE_RE = /^(yes|yeah|yep|yup|go|go ahead|go for it|do it|approve|approved|ok go|ok do it|run it|send it|ship it|proceed|sounds good|lets do it|let's do it|lgtm)[.! ]*$/i;
+const STOP_RE = /^(stop|cancel|stop it|cancel it|abort)[.! ]*$/i;
+const NAME_OF = { 'ai-daytrading-bot': 'trading', 'retro-game-platform': 'retro', 'the-crease': 'crease', 'x3-discord-admin-ai': 'x3', 'lax-sixes': 'sixes' };
+const pendingAsk = new Map(); // channel -> request waiting for "which project?"
+
+function latestTask(channel, statuses, maxAgeMs = 6 * 3600 * 1000) {
+  return Object.values(state.tasks).filter(t => t.channel === channel && statuses.includes(t.status) && Date.now() - Date.parse(t.created) < maxAgeMs)
+    .sort((a, b) => b.n - a.n)[0] || null;
+}
+
+async function classify(text, cfg, history, focus, lastPlan) {
+  const recent = (history || []).slice(-6).map(m => `${m.role === 'user' ? 'Owner' : 'Jarvis'}: ${short(m.content, 300)}`).join('\n');
+  const sys = [
+    'You route messages for Jarvis, the owner\'s hub assistant. Do not answer the message; only classify it.',
+    'Projects: trading (AI trading desk: paper trading, market map, Alpaca), retro (Rewind Arcade, the retro/indie browser game platform and store),',
+    'crease (The Crease lacrosse highlight video engine), x3 (X3 gym Discord admin bot), sixes (Sixes lacrosse video game in Unreal Engine).',
+    'intent "work": the owner wants something done or decided in a project: build, add, fix, change, test, review, clean up, continue, "what\'s next", "keep going", "take a look and see what to do".',
+    'intent "look": a question that needs reading a project\'s files or history to answer (how does X work, where is Y, what changed, what is the status of this project), with no request to change anything.',
+    'intent "chat": anything else: general questions, greetings, opinions, questions about the hub machines, or announcing a topic with no request yet (e.g. "I want to work on retro" alone is chat, but it still names the project).',
+    'project: the project it is about, using the conversation and the current focus for words like "it", "the project", "this"; "none" if unclear.',
+    'revise: true only if the owner is changing or adding to the plan Jarvis just proposed instead of asking for something new.',
+    'request: the owner\'s request restated as one self-contained sentence (resolve "it"/"that" from the conversation).',
+    'Answer JSON only: {"intent":"work|look|chat","project":"trading|retro|crease|x3|sixes|none","revise":false,"request":"..."}',
+  ].join('\n');
+  const user = [`Current focus project: ${focus ? NAME_OF[focus] : 'none'}`,
+    lastPlan ? `Plan Jarvis proposed most recently (${lastPlan.id}, ${NAME_OF[lastPlan.repo]}): ${short(lastPlan.plan, 500)}` : '',
+    recent ? `Recent conversation:\n${recent}` : '', `New message: ${text}`].filter(Boolean).join('\n\n');
+  const res = await fetch((cfg.OLLAMA_URL || 'http://127.0.0.1:11434') + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(120000),
+    body: JSON.stringify({ model: cfg.OLLAMA_MODEL || 'qwen3:30b', stream: false, think: false, format: 'json', options: { temperature: 0, num_ctx: 8192 },
+      messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] }) });
+  if (!res.ok) throw new Error(`Ollama answered HTTP ${res.status}`);
+  const j = JSON.parse((await res.json()).message.content);
+  return { intent: ['work', 'look', 'chat'].includes(j.intent) ? j.intent : 'chat', project: PROJECTS[j.project] ? j.project : null,
+    revise: j.revise === true, request: String(j.request || text).trim() || text };
+}
+
+// Returns true when the message was handled here (an agent task was started, approved, stopped or queued);
+// false means it is ordinary conversation for the local model.
+async function converse(text, author, cfg, reply, ctx = {}) {
+  const channel = ctx.channel || 'dm';
+  const t0 = text.trim();
+  state.focus = state.focus || {};
+
+  if (APPROVE_RE.test(t0)) {
+    const t = latestTask(channel, ['planned']);
+    if (!t) return false;
+    return handle(`approve ${t.id}`, author, cfg, reply, ctx).then(() => true);
+  }
+  if (STOP_RE.test(t0) && busy()) {
+    if (running) { running.child.kill('SIGTERM'); await reply(`Stopping ${running.id}.`); }
+    else await reply(`${busy()} is between steps; send \`tasks\` to see it.`);
+    return true;
+  }
+
+  // Answer to "which project?"
+  const waiting = pendingAsk.get(channel);
+  if (waiting && PROJECTS[t0.toLowerCase()]) {
+    pendingAsk.delete(channel);
+    await handle(`${waiting.kind} ${t0.toLowerCase()} ${waiting.request}`, author, cfg, reply, ctx);
+    return true;
+  }
+
+  // Cheap pre-check: is a project word in the message? Then it can set the focus even for chat.
+  const words = t0.toLowerCase().match(/[a-z0-9-]+/g) || [];
+  const named = words.map(w => PROJECTS[w]).find(Boolean);
+  const focus = named || state.focus[channel] || null;
+  const lastPlan = latestTask(channel, ['planned'], 2 * 3600 * 1000);
+  let c;
+  try { c = await classify(t0, cfg, ctx.history, focus, lastPlan); } catch (e) { console.error('classify failed:', e.message); return false; }
+  const repo = PROJECTS[c.project] || focus;
+  if (repo) { state.focus[channel] = repo; save(); }
+  if (c.intent === 'chat') return false;
+
+  if (!repo) {
+    pendingAsk.set(channel, { kind: c.intent === 'look' ? 'look' : 'plan', request: c.request });
+    await reply(`Which project is that for? Reply with one word: ${PROJECT_LIST.replace(/\|/g, ', ')}.`);
+    return true;
+  }
+  const word = NAME_OF[repo];
+  if (c.intent === 'work' && c.revise && lastPlan && lastPlan.repo === repo) {
+    lastPlan.status = 'superseded'; save();
+    await reply(`Revising ${lastPlan.id} (${word}) with that change.`);
+    await handle(`plan ${word} ${lastPlan.request}. Revise the earlier plan below with this change from the owner: ${c.request}\nEarlier plan:\n${lastPlan.plan}`, author, cfg, reply, ctx);
+    return true;
+  }
+  await reply(c.intent === 'look' ? `On it: looking into **${word}** (read-only).` : `On it: **${word}**. I'll read the project and bring back a plan; nothing changes until you say go.`);
+  await handle(`${c.intent === 'look' ? 'look' : 'plan'} ${word} ${c.request}`, author, cfg, reply, ctx);
+  return true;
+}
+
+function focusOf(channel) { return (state.focus || {})[channel || 'dm'] || null; }
+
 // Nightly backup of the Sixes working folder (non-destructive; skipped quietly if the PA PC is off).
 async function nightlySixesCheckpoint(cfg) {
-  if (running) return null;
+  if (busy()) return null;
   try { return await runProc('/usr/bin/ssh', cfg, HOME, sshArgs(machineFor('lax-sixes', cfg), 'checkpoint T0 lax-sixes -'), 10 * 60000, 'sixes-nightly', 'the PA PC worker', ''); }
   catch (e) { return `Nightly Sixes backup skipped: ${e.message.slice(0, 200)}`; }
 }
 
-module.exports = { handle, USAGE, interruptedAtStart, nightlySixesCheckpoint,
-  isTaskCommand: t => /^(plan|approve|cancel|discard|tasks|agents)\b|^work\s+on\b|^(build|push|checkpoint)\s+sixes$|^sixes\s+status$|^confirm\s+(build|push)$/i.test(t.trim()) };
+module.exports = { handle, converse, focusOf, USAGE, interruptedAtStart, nightlySixesCheckpoint, _test: { APPROVE_RE, PROJECTS, exclusive },
+  isTaskCommand: t => new RegExp(`^look\\s+(${Object.keys(PROJECTS).join('|')})\\b`, 'i').test(t.trim()) || /^(plan|approve|cancel|discard|tasks|agents)\b|^work\s+on\b|^(build|push|checkpoint)\s+sixes$|^sixes\s+status$|^confirm\s+(build|push)$/i.test(t.trim()) };
