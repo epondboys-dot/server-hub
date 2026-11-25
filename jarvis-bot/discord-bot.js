@@ -104,7 +104,8 @@ async function statusText() {
 
   const ts = await portOpen(cfg.TRADING_HOST, 22);
   lines.push(`- Trading server (${cfg.TRADING_HOST}): ${ts ? 'reachable over Tailscale' : '**not reachable**'}`);
-  return lines.join('\n');
+  lines.push(`- Jarvis version ${installedVersion().slice(0, 7)} (\`updates\` for what's new)`);
+  return tasks.workStatus() + '\n\n' + lines.join('\n');
 }
 
 function needsYou() {
@@ -153,6 +154,53 @@ async function ask(key, question) {
   return answer || '(no answer)';
 }
 
+// ---------- self-updates ----------
+// Jarvis cannot change his own code (it is root-owned). He drops a one-word request into ~/hub/update/queue and the
+// root updater (com.pondboys.hub-update) installs the newest GitHub main, checks that the bot stays up, and rolls back
+// if not. Requests wait until no agent job is running, so an update never cuts a job off.
+const UPD_DIR = `${os.homedir()}/hub/update`;
+const RESULT_FILE = '/usr/local/var/pondboys/update-result.txt';
+const HUB_CLONE = `${os.homedir()}/projects/server-hub`;
+function installedVersion() { try { return fs.readFileSync(`${__dirname}/VERSION`, 'utf8').trim(); } catch { return 'unknown'; } }
+function gitOut(args) { return new Promise(res => execFile('git', ['-C', HUB_CLONE, ...args], { timeout: 60000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, (e, out) => res(e ? null : String(out).trim()))); }
+async function pendingHub() {
+  if (await gitOut(['fetch', '-q', 'origin']) === null) return { error: 'could not reach GitHub' };
+  const head = await gitOut(['rev-parse', 'origin/main']);
+  const v = installedVersion();
+  if (!head || head === v) return { head, list: [] };
+  const log = await gitOut(['log', '--format=%h %s', `${v}..origin/main`]);
+  return { head, list: (log || `(installed version ${v.slice(0, 7)} not found; will install ${head.slice(0, 7)})`).split('\n').filter(Boolean) };
+}
+function requestUpdate(modes) {
+  fs.mkdirSync(`${UPD_DIR}/queue`, { recursive: true });
+  fs.writeFileSync(`${UPD_DIR}/queue/${Date.now()}-${modes.join('-')}`, modes.join(' '));
+}
+function updateWhenIdle(modes, target, why) {
+  const label = tasks.busyLabel();
+  if (label && target) send(target, `${why} I'll start it when ${label} finishes, so nothing gets cut off.`).catch(() => {});
+  tasks.whenIdle(() => {
+    if (target) send(target, `Updating now (${modes.join(' + ')}). ${modes.includes('hub') ? 'I\'ll restart and post the result in about a minute.' : 'I\'ll post the result here.'}`).catch(() => {});
+    requestUpdate(modes);
+  });
+}
+// Post the updater's result once (works across the restart an update causes).
+let lastResult = null;
+async function announceResult() {
+  let text; try { text = fs.readFileSync(RESULT_FILE, 'utf8'); } catch { return; }
+  const id = (/^id (\d+)/m.exec(text) || [])[1];
+  if (!id) return;
+  const seenFile = `${UPD_DIR}/announced`;
+  if (lastResult === null) { try { lastResult = fs.readFileSync(seenFile, 'utf8').trim(); } catch { lastResult = ''; } }
+  if (id === lastResult) return;
+  lastResult = id; try { fs.writeFileSync(seenFile, id); } catch {}
+  const ok = /^ok 1/m.test(text);
+  const body = text.split('\n').filter(l => l && !/^(id|ok) /.test(l)).join('\n');
+  const extra = ok ? '' : '\n\nSay `fix the hub update` and I\'ll have an agent read the logs and plan a fix (it lands after you push it).';
+  if (client.isReady()) await send(await homeChannel(), `**Update ${ok ? 'done' : 'had a problem'}**\n${body}${extra}`);
+  // New hub code may carry a new PA PC worker: let the PC fetch it from GitHub itself.
+  if (/Jarvis updated/.test(body)) tasks.whenIdle(async () => { const r = await tasks.workerOp('selfupdate', cfg, 5 * 60000); if (!/already current|not set up/.test(r)) send(await homeChannel(), r).catch(() => {}); });
+}
+
 // ---------- discord ----------
 function chunks(text, size = 1900) {
   const out = [];
@@ -179,6 +227,7 @@ const HELP = [
   '- `ask <question>`: answer from the hub\'s own knowledge base, with sources',
   '- `learn`: refresh the knowledge base now (it also learns every night at 02:30)',
   '- `knowledge`: what the knowledge base holds and when it last learned',
+  '- `updates`: version and what is new · `update` (Jarvis + X3) · `update tools` · `update desk` (asks first) · `update everything`. Nightly at 03:15 when idle',
   '- anything else: just talk. Work and questions about a project go to Claude Code or Codex; other questions to the local AI',
 ].join('\n') + '\n\n' + desk.USAGE + '\n\n' + tasks.USAGE;
 
@@ -198,6 +247,7 @@ async function homeChannel() {
 }
 
 client.once(Events.ClientReady, async c => {
+  setTimeout(() => announceResult().catch(() => {}), 5000);
   console.log(`${new Date().toISOString()} Jarvis online as ${c.user.tag}; obeys ${owners.length} owner account(s)`);
   const resumable = tasks.interruptedAtStart.length ? `\nInterrupted by the restart: ${tasks.interruptedAtStart.map(id => `**${id}**`).join(', ')}. Send \`approve <id>\` to run it again from a clean copy, or \`discard <id>\`.` : '';
   try { await send(await homeChannel(), 'Jarvis is online. Type `help` for commands.' + resumable); } catch (e) {
@@ -233,6 +283,33 @@ client.on(Events.MessageCreate, async msg => {
         return send(msg.channel, await knowledge.answer(text.replace(/^ask\s+/i, '')));
       } finally { clearInterval(typing); busy = false; }
     }
+    if (/^(update|updates|update (jarvis|hub|everything|all|tools|desk)|confirm update desk)$/i.test(cmd)) {
+      const what = cmd.replace(/^update\s*/, '');
+      if (cmd === 'updates') {
+        const p = await pendingHub(); let last = ''; try { last = fs.readFileSync(RESULT_FILE, 'utf8').split('\n').filter(l => !/^(id|ok) /.test(l)).join('\n'); } catch {}
+        return send(msg.channel, `**Jarvis version** ${installedVersion().slice(0, 7)}. ${p.error ? `GitHub: ${p.error}.` : p.list.length ? `**${p.list.length} new on GitHub:**\n${p.list.slice(0, 10).map(l => '- ' + l).join('\n')}` : 'Up to date with GitHub.'}` +
+          `\n\nLast update run:\n${last || '(none yet)'}\n\n\`update\`: Jarvis + X3 now · \`update tools\`: Claude Code, Codex, Ollama · \`update desk\`: the trading desk (asks first) · \`update everything\`. Every night at 03:15 Jarvis updates himself, the X3 bot, the tools and the PA PC worker when idle.`);
+      }
+      if (what === 'desk') {
+        pendingDeskUpdate = { by: msg.author.id, at: Date.now() };
+        return send(msg.channel, 'Update the trading desk on tradingserver to the newest GitHub main? It restarts the desk (paper only; positions and settings are kept). It refuses if hard-off is latched or tradingserver has local edits, and rolls back if the desk does not stay up. Type `confirm update desk` within 5 minutes.');
+      }
+      if (cmd === 'confirm update desk') {
+        if (!pendingDeskUpdate || pendingDeskUpdate.by !== msg.author.id || Date.now() - pendingDeskUpdate.at > 5 * 60000) return send(msg.channel, 'Nothing to confirm. Type `update desk` first.');
+        pendingDeskUpdate = null; requestUpdate(['desk']);
+        return send(msg.channel, 'Updating the desk now. I\'ll post the result here (about a minute).');
+      }
+      const modes = what === 'tools' ? ['tools'] : (what === 'everything' || what === 'all') ? ['hub', 'tools'] : ['hub'];
+      if (modes.includes('hub')) {
+        const p = await pendingHub();
+        if (p.error) return send(msg.channel, `Can't check for updates: ${p.error}.`);
+        if (!p.list.length && modes.length === 1) return send(msg.channel, `Already up to date (${installedVersion().slice(0, 7)}).`);
+        if (p.list.length) await send(msg.channel, `**New since ${installedVersion().slice(0, 7)}:**\n${p.list.slice(0, 10).map(l => '- ' + l).join('\n')}`);
+      }
+      updateWhenIdle(modes, msg.channel, 'Agent work is running.');
+      if (what === 'everything' || what === 'all') tasks.whenIdle(async () => send(msg.channel, await tasks.workerOp('tools', cfg)).catch(() => {}));
+      return;
+    }
     if (desk.isDeskCommand(text)) { await msg.channel.sendTyping(); return desk.handle(text, msg.author.id, cfg, t => send(msg.channel, t)); }
     const buried = /\b(approve|discard|cancel)\s+(T\d+)\b/i.exec(text);
     if (buried && !tasks.isTaskCommand(text)) return send(msg.channel, `Did you mean \`${buried[1].toLowerCase()} ${buried[2].toUpperCase()}\`? Send it as its own message, nothing else, and I'll do it. New details belong in a fresh \`plan\`.`);
@@ -264,7 +341,8 @@ client.on(Events.MessageCreate, async msg => {
 });
 
 // Daily morning post
-let lastPosted = '', lastBackup = '';
+let lastPosted = '', lastBackup = '', lastUpdateDay = '';
+let pendingDeskUpdate = null;
 setInterval(async () => {
   const now = new Date();
   const hm = now.toTimeString().slice(0, 5);
@@ -272,6 +350,15 @@ setInterval(async () => {
   if (hm === '02:00' && lastBackup !== day) { // nightly Sixes working-folder backup on the PA PC; only problems are posted
     lastBackup = day;
     tasks.nightlySixesCheckpoint(cfg).then(r => { console.log(`${new Date().toISOString()} sixes nightly: ${r}`); if (r && /skipped/i.test(r) && client.isReady()) homeChannel().then(ch => send(ch, r)).catch(() => {}); });
+  }
+  announceResult().catch(e => console.error('announce:', e.message));
+  if (hm === (cfg.UPDATE_TIME || '03:15') && lastUpdateDay !== day && cfg.AUTO_UPDATE !== 'off') { // nightly self-update, only when idle
+    lastUpdateDay = day;
+    pendingHub().then(p => {
+      const modes = p.list && p.list.length ? ['hub', 'tools'] : ['tools'];
+      updateWhenIdle(modes, null, '');
+      tasks.whenIdle(async () => { const r = [await tasks.workerOp('selfupdate', cfg, 5 * 60000), await tasks.workerOp('tools', cfg)]; console.log(`${new Date().toISOString()} PA PC: ${r.join(' | ')}`); });
+    }).catch(e => console.error('nightly update check:', e.message));
   }
   if (hm !== cfg.BRIEFING_TIME || lastPosted === day || !client.isReady()) return;
   lastPosted = day;

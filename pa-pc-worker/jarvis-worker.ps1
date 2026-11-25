@@ -1,4 +1,4 @@
-# Jarvis worker on the PA PC (v2, Nov 25, 2026). The ONLY thing Jarvis's SSH key can run here (forced command in
+# Jarvis worker on the PA PC (v3, Nov 25, 2026). The ONLY thing Jarvis's SSH key can run here (forced command in
 # C:\ProgramData\ssh\administrators_authorized_keys). Installed to C:\ProgramData\jarvis-worker\ (admin-owned).
 # Owner decision (Nov 25): agents work in the Sixes working folder itself, and the PC can build and push, as automated
 # as possible, with the owner confirming builds and pushes from Discord.
@@ -11,6 +11,9 @@
 #   push       push the current branch to GitHub; never force, so it refuses if GitHub has newer work
 #   status     branch, ahead/behind, changed files, last checkpoint
 #   discard    remove an old v1 task copy (G:\AI-Projects\_jarvis-work\<Tn>)
+#   selfupdate replace this script with pa-pc-worker/jarvis-worker.ps1 from server-hub main ON GITHUB (fetched here with
+#              this PC's own GitHub sign-in, never sent by Jarvis), after a syntax check; the old copy is kept as .prev
+#   tools      update Claude Code and Codex on this PC
 # 'Continue' on purpose: Windows PowerShell turns any stderr line from git/claude into a terminating error under
 # 'Stop' (git prints progress there even on success). Failures are checked through exit codes instead.
 $ErrorActionPreference = 'Continue'
@@ -23,7 +26,7 @@ function Note($m) { Add-Content -Path $Log -Value ("{0} {1}" -f (Get-Date -Forma
 function Fail($m, $code = 2) { Note "FAILED: $m"; [Console]::Error.WriteLine($m); exit $code }
 
 $cmd = "$env:SSH_ORIGINAL_COMMAND".Trim()
-if ($cmd -notmatch '^(plan|do|checkpoint|build|push|status|discard) (T\d{1,5}) ([a-z0-9-]{1,40}) (claude|codex|-)$') { Fail "Not an allowed worker command: '$cmd'" }
+if ($cmd -notmatch '^(plan|do|checkpoint|build|push|status|discard|selfupdate|tools) (T\d{1,5}) ([a-z0-9-]{1,40}) (claude|codex|-)$') { Fail "Not an allowed worker command: '$cmd'" }
 $action, $id, $repoName, $agent = $Matches[1], $Matches[2], $Matches[3], $Matches[4]
 if (-not $Repos.ContainsKey($repoName)) { Fail "Unknown project '$repoName' on this machine" }
 $P = $Repos[$repoName]; $repo = $P.Path
@@ -53,6 +56,29 @@ function Checkpoint($label) {
 }
 
 switch ($action) {
+  'selfupdate' {
+    $env:GCM_INTERACTIVE = 'never'; $env:GIT_TERMINAL_PROMPT = '0'
+    $src = 'C:\ProgramData\jarvis-worker\src'
+    if (-not (Test-Path "$src\.git")) { $o = & git.exe clone -q --depth 1 https://github.com/epondboys-dot/server-hub.git $src 2>&1 }
+    else { $o = & git.exe -C $src fetch -q --depth 1 origin main 2>&1; if ($LASTEXITCODE -eq 0) { $o = & git.exe -C $src reset -q --hard FETCH_HEAD 2>&1 } }
+    if ($LASTEXITCODE -ne 0) { Fail "Couldn't get server-hub from GitHub on this PC: $($o -join ' ')" }
+    $new = Join-Path $src 'pa-pc-worker\jarvis-worker.ps1'; $rev = (& git.exe -C $src rev-parse --short HEAD)
+    if (-not (Test-Path $new)) { Fail "server-hub $rev has no pa-pc-worker\jarvis-worker.ps1" }
+    $errs = $null; [void][System.Management.Automation.Language.Parser]::ParseFile($new, [ref]$null, [ref]$errs)
+    if ($errs -and $errs.Count) { Fail "server-hub $rev worker has syntax errors; kept the current one: $($errs[0].Message)" }
+    $self = $PSCommandPath
+    $norm = { param($f) ((Get-Content -Raw $f) -replace "`r`n", "`n").Trim() }
+    if ((& $norm $new) -eq (& $norm $self)) { Write-Output "PA PC worker already current (server-hub $rev)."; exit 0 }
+    Copy-Item $self "$self.prev" -Force; Copy-Item $new $self -Force
+    Note "selfupdate to server-hub $rev"
+    Write-Output "PA PC worker updated to server-hub $rev (previous copy kept as jarvis-worker.ps1.prev)."; exit 0
+  }
+  'tools' {
+    $msgs = @()
+    if (Get-Command claude -ErrorAction SilentlyContinue) { $o = & claude update 2>&1; $msgs += "Claude Code: $((($o | Select-Object -Last 1) -as [string]).Trim())" }
+    if (Get-Command codex.cmd -ErrorAction SilentlyContinue) { $o = & npm.cmd install -g --silent '@openai/codex@latest' 2>&1; $msgs += "Codex: $((& codex.cmd --version 2>&1 | Select-Object -Last 1))" }
+    Write-Output ("PA PC tools: " + ($msgs -join '; ')); exit 0
+  }
   'status' {
     G fetch --quiet origin | Out-Null
     $b = (G rev-parse --abbrev-ref HEAD | Select-Object -Last 1).Trim()

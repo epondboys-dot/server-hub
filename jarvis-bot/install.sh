@@ -36,6 +36,10 @@ mkdir -p "$APP"
 install -m 644 "$SRC/discord-bot.js" "$SRC/tasks.js" "$SRC/desk.js" "$SRC/knowledge.js" "$SRC/package.json" "$APP/"
 install -m 644 "$SRC/jarvis-bot.env.example" "$APP/"
 ( cd "$APP" && PATH="$(dirname "$NODE"):$PATH" "$NPM" install --omit=dev --no-audit --no-fund --loglevel=error )
+# Version stamp (the updater compares it with GitHub) and the PA PC worker script the bot hands out.
+VERSION="${HUB_VERSION:-$(git -c safe.directory='*' -C "$SRC/.." rev-parse HEAD 2>/dev/null || echo manual)}"
+echo "$VERSION" > "$APP/VERSION"
+mkdir -p "$APP/worker"; [ -f "$SRC/../pa-pc-worker/jarvis-worker.ps1" ] && install -m 644 "$SRC/../pa-pc-worker/jarvis-worker.ps1" "$APP/worker/"
 chown -R root:wheel "$APP"
 chmod -R go-w "$APP"
 "$NODE" --check "$APP/discord-bot.js" && "$NODE" --check "$APP/tasks.js" && "$NODE" --check "$APP/desk.js" && "$NODE" --check "$APP/knowledge.js" && echo "Code OK."
@@ -109,6 +113,37 @@ EOF
 chown root:wheel "$LEARN_PLIST"; chmod 644 "$LEARN_PLIST"; plutil -lint "$LEARN_PLIST" >/dev/null
 launchctl bootout system/com.pondboys.jarvis-learn 2>/dev/null || true
 launchctl bootstrap system "$LEARN_PLIST" && echo "    nightly learning scheduled (first run tonight, or send 'learn' in Discord)"
+
+say "4c. Self-updates (com.pondboys.hub-update, root): Jarvis asks for them when idle; nightly fallback 04:20"
+LIB=/usr/local/libexec/pondboys; mkdir -p "$LIB" /usr/local/var/pondboys
+if [ -f "$SRC/../jarvis-update/hub-update.sh" ]; then
+  cp "$SRC/../jarvis-update/hub-update.sh" "$LIB/.hub-update.new" && chmod 755 "$LIB/.hub-update.new" && chown root:wheel "$LIB/.hub-update.new" && mv "$LIB/.hub-update.new" "$LIB/hub-update.sh"
+fi
+# The admin account that runs Homebrew and holds the SSH key for tradingserver (whoever ran this with sudo).
+if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ] && [ "$SUDO_USER" != "$AGENT_USER" ]; then
+  TS_HOST="$(grep -E '^DESK_SSH_HOST=' "$ENV_FILE" 2>/dev/null | cut -d= -f2)"
+  printf 'ADMIN_USER=%s\nTRADING_HOST=%s\n' "$SUDO_USER" "${TS_HOST:-100.111.197.47}" > "$LIB/updater.conf"
+fi
+chown -R root:wheel "$LIB"; chmod 644 "$LIB/updater.conf" 2>/dev/null || true
+install -d -m 700 -o "$AGENT_USER" -g staff "$AGENT_HOME/hub/update" "$AGENT_HOME/hub/update/queue"
+UPD_PLIST=/Library/LaunchDaemons/com.pondboys.hub-update.plist
+cat > "$UPD_PLIST" <<PLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.pondboys.hub-update</string>
+  <key>ProgramArguments</key><array><string>/bin/bash</string><string>$LIB/hub-update.sh</string></array>
+  <key>QueueDirectories</key><array><string>$AGENT_HOME/hub/update/queue</string></array>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>4</integer><key>Minute</key><integer>20</integer></dict>
+  <key>StandardOutPath</key><string>/Library/Logs/hub-update.log</string>
+  <key>StandardErrorPath</key><string>/Library/Logs/hub-update.log</string>
+</dict></plist>
+PLISTEOF
+chown root:wheel "$UPD_PLIST"; chmod 644 "$UPD_PLIST"; plutil -lint "$UPD_PLIST" >/dev/null
+if [ -z "${HUB_UPDATER:-}" ]; then  # never reload the updater from inside its own run
+  launchctl bootout system/com.pondboys.hub-update 2>/dev/null || true
+  launchctl bootstrap system "$UPD_PLIST" && echo "    self-updates on (version ${VERSION:0:7}); admin account: $(grep ADMIN_USER "$LIB/updater.conf" 2>/dev/null | cut -d= -f2)"
+fi
 
 say "5. Start"
 launchctl bootout "system/$LABEL" 2>/dev/null || true

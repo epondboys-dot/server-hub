@@ -26,6 +26,7 @@ const PROJECTS = {
   crease: 'the-crease', 'the-crease': 'the-crease',
   x3: 'x3-discord-admin-ai', 'x3-discord-admin-ai': 'x3-discord-admin-ai', gym: 'x3-discord-admin-ai',
   sixes: 'lax-sixes', 'lax-sixes': 'lax-sixes', lax: 'lax-sixes', lacrosse: 'lax-sixes', unreal: 'lax-sixes',
+  hub: 'server-hub', 'server-hub': 'server-hub', updater: 'server-hub', jarvis: 'server-hub',
   'rewind-arcade': 'retro-game-platform', platform: 'retro-game-platform', 'trading-desk': 'ai-daytrading-bot',
 };
 // Where each project's agents work. Anything not listed runs here on Jarvis (~/projects, ~/work).
@@ -55,8 +56,12 @@ const SIXES_NOTE = 'This is the Sixes lacrosse game (Unreal Engine 5.8) in the o
   'read CLAUDE.md and the latest Docs first and preserve existing local edits. Never change .vsconfig or .slnx. You have no shell: ' +
   'make code and text edits only. Jarvis backs the folder up before and after, and the owner starts builds separately (`build sixes`); ' +
   'finish by saying exactly what to build or pad-test to check your change.';
+const HUB_NOTE = 'This is server-hub: the hub\'s own code (the Jarvis bot, the self-updater, setup scripts, the PA PC worker). ' +
+  'Check changed files with node --check (JavaScript) and bash -n (shell). Never run install or setup scripts, never use sudo, ' +
+  'never read or print tokens or settings files. Read /Library/Logs/hub-update.log and ~/Library/Logs/jarvis-bot.log if a problem needs them. ' +
+  'Your fix reaches the machines only after the owner pushes your branch; the updater then installs it and rolls back if the bot does not stay up.';
 function projectNote(repo) {
-  return { 'ai-daytrading-bot': TRADING_RULES, 'the-crease': CREASE_NOTE, 'retro-game-platform': RETRO_NOTE,
+  return { 'server-hub': HUB_NOTE, 'ai-daytrading-bot': TRADING_RULES, 'the-crease': CREASE_NOTE, 'retro-game-platform': RETRO_NOTE,
     'x3-discord-admin-ai': X3_NOTE, 'lax-sixes': SIXES_NOTE }[repo] || '';
 }
 
@@ -65,7 +70,7 @@ const PLAN_BLOCKED = ['Edit', 'Write', 'NotebookEdit', 'Bash'];
 const DO_TOOLS = ['Read', 'Glob', 'Grep', 'Edit', 'Write',
   'Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git add:*)', 'Bash(git commit:*)',
   'Bash(node --test:*)', 'Bash(node --check:*)', 'Bash(npm test:*)', 'Bash(npm run test:*)',
-  'Bash(crease-test:*)', 'Bash(/Users/jarvis/bin/crease-test:*)', 'Bash(retro-test:*)', 'Bash(/Users/jarvis/bin/retro-test:*)',
+  'Bash(bash -n:*)', 'Bash(crease-test:*)', 'Bash(/Users/jarvis/bin/crease-test:*)', 'Bash(retro-test:*)', 'Bash(/Users/jarvis/bin/retro-test:*)',
   `Bash(${X3_PY} -m unittest:*)`];
 const BLOCKED = ['Bash(git push:*)', 'Bash(git remote:*)', 'Bash(curl:*)', 'Bash(wget:*)', 'Bash(rm -rf:*)',
   'Bash(sudo:*)', 'WebFetch', 'WebSearch'];
@@ -88,6 +93,11 @@ let running = null; // { id, child }
 let active = null; // label of the job in progress (covers the gaps between agent processes)
 const queue = [];
 const busy = () => active || (running && running.id);
+const idleWaiters = [];
+function flushIdle() { if (busy()) return; while (idleWaiters.length) { try { idleWaiters.shift()(); } catch (e) { console.error('idle hook:', e.message); } } }
+// Run fn as soon as no agent job is running or waiting (right away if idle). Used for self-updates.
+function whenIdle(fn) { if (!busy() && !queue.length) fn(); else idleWaiters.push(fn); }
+function busyLabel() { return busy() ? `${busy()}${queue.length ? ` (+${queue.length} waiting)` : ''}` : null; }
 async function exclusive(label, reply, fn) {
   if (busy()) {
     queue.push({ label, reply, fn });
@@ -97,6 +107,7 @@ async function exclusive(label, reply, fn) {
   try { return await fn(); } finally {
     active = null;
     const next = queue.shift();
+    if (!next) setImmediate(flushIdle);
     if (next) setImmediate(() => exclusive(next.label, next.reply, next.fn).catch(e => next.reply(`Queued job failed: ${e.message}`)));
   }
 }
@@ -206,7 +217,7 @@ function resolveProject(word) {
 
 function short(s, n = 80) { s = String(s).replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
 
-const PROJECT_LIST = 'trading|retro|crease|x3|sixes';
+const PROJECT_LIST = 'trading|retro|crease|x3|sixes|hub';
 const USAGE = [
   '**Agent tasks** (Claude Code or Codex; nothing reaches GitHub without you)',
   '- **Just talk to me.** "what\'s next on retro", "fix the login bug in x3", "take a look at the project": I work out the project (and remember it for follow-ups), read it with Claude Code or Codex, and bring back a plan. Say `go` to carry it out, or tell me what to change. Questions about a project ("how does scoring work in sixes?") get an answer from the files. Anything new while an agent works waits in line; nothing gets interrupted. `stop` stops the running job.',
@@ -214,7 +225,7 @@ const USAGE = [
   '- `plan <project> <what you want>`: read-only; replies with a plan and a task id. Jarvis picks Claude Code or Codex itself (switches when one hits its limit); add `--claude` or `--codex` to choose',
   '- `approve <id>`: carry out that plan in a separate copy on branch `jarvis/<id>`; commits there, never pushes',
   '- `tasks`: recent tasks · `cancel <id>`: stop a running task · `discard <id>`: delete its copy and branch',
-  '- Projects: trading, retro, crease, x3 (on Jarvis) · sixes (on the PA PC, in its working folder, backed up to GitHub before and after)',
+  '- Projects: trading, retro, crease, x3, hub (Jarvis\'s own code) (on Jarvis) · sixes (on the PA PC, in its working folder, backed up to GitHub before and after)',
   '- Sixes: `sixes status` · `checkpoint sixes` (backup, also nightly at 02:00) · `build sixes` · `push sixes` (both ask you to confirm)',
 ].join('\n');
 
@@ -339,7 +350,7 @@ async function handle(text, author, cfg, reply, ctx = {}) {
       if (kind === 'look') return reply(`**${id}** (${proj.repo}, ${NAMES[agent]})\n${t.plan}\n\nTell me what you'd like done next and I'll plan it.`);
       return reply(`**${id} plan** (${proj.repo}, ${NAMES[agent]})\n${t.plan}\n\nTo carry it out say \`go\` (or \`approve ${id}\`). To change it, just tell me what to change. Nothing changes until then.`);
     } catch (e) {
-      t.status = 'failed'; t.error = e.message; save();
+      t.status = 'failed'; t.error = e.message; t.finished = new Date().toISOString(); save();
       return reply(`**${id}** ${kind === 'look' ? 'lookup' : 'planning'} failed: ${e.message}`);
     }
     });
@@ -375,7 +386,7 @@ async function handle(text, author, cfg, reply, ctx = {}) {
         return reply([`**${t.id} done** on the ${machine.name} (${t.repo}, ${NAMES[t.doneBy] || ''})`, t.summary, '',
           'Next: `build sixes` to compile it (you confirm), `sixes status`, or `push sixes` once it is committed and the rigs are in sync.'].join('\n'));
       } catch (e) {
-        t.status = 'failed'; t.error = e.message; save();
+        t.status = 'failed'; t.error = e.message; t.finished = new Date().toISOString(); save();
         return reply(`**${t.id}** stopped on the ${machine.name}: ${e.message}\nAny edits it made are in the working folder; the "before" backup branch on GitHub has the state from just before it started.`);
       }
     }
@@ -416,7 +427,7 @@ async function handle(text, author, cfg, reply, ctx = {}) {
         `Or \`discard ${t.id}\` to throw it away.`,
       ].join('\n'));
     } catch (e) {
-      t.status = 'failed'; t.error = e.message; save();
+      t.status = 'failed'; t.error = e.message; t.finished = new Date().toISOString(); save();
       return reply(`**${t.id}** stopped: ${e.message}\nThe copy is kept at ~/work/${t.id}; \`discard ${t.id}\` removes it.`);
     }
     });
@@ -456,7 +467,7 @@ async function handle(text, author, cfg, reply, ctx = {}) {
 // changes until the owner says go. Approval is never decided by the model: only an owner's plain yes/go counts.
 const APPROVE_RE = /^(yes|yeah|yep|yup|go|go ahead|go for it|do it|approve|approved|ok go|ok do it|run it|send it|ship it|proceed|sounds good|lets do it|let's do it|lgtm)[.! ]*$/i;
 const STOP_RE = /^(stop|cancel|stop it|cancel it|abort)[.! ]*$/i;
-const NAME_OF = { 'ai-daytrading-bot': 'trading', 'retro-game-platform': 'retro', 'the-crease': 'crease', 'x3-discord-admin-ai': 'x3', 'lax-sixes': 'sixes' };
+const NAME_OF = { 'server-hub': 'hub', 'ai-daytrading-bot': 'trading', 'retro-game-platform': 'retro', 'the-crease': 'crease', 'x3-discord-admin-ai': 'x3', 'lax-sixes': 'sixes' };
 const pendingAsk = new Map(); // channel -> request waiting for "which project?"
 
 function latestTask(channel, statuses, maxAgeMs = 6 * 3600 * 1000) {
@@ -469,14 +480,15 @@ async function classify(text, cfg, history, focus, lastPlan) {
   const sys = [
     'You route messages for Jarvis, the owner\'s hub assistant. Do not answer the message; only classify it.',
     'Projects: trading (AI trading desk: paper trading, market map, Alpaca), retro (Rewind Arcade, the retro/indie browser game platform and store),',
-    'crease (The Crease lacrosse highlight video engine), x3 (X3 gym Discord admin bot), sixes (Sixes lacrosse video game in Unreal Engine).',
+    'crease (The Crease lacrosse highlight video engine), x3 (X3 gym Discord admin bot), sixes (Sixes lacrosse video game in Unreal Engine),',
+    'hub (the hub\'s own code: Jarvis himself, his commands, the self-updater, machine setup scripts, the PA PC worker).',
     'intent "work": the owner wants something done or decided in a project: build, add, fix, change, test, review, clean up, continue, "what\'s next", "keep going", "take a look and see what to do".',
     'intent "look": a question that needs reading a project\'s files or history to answer (how does X work, where is Y, what changed, what is the status of this project), with no request to change anything.',
     'intent "chat": anything else: general questions, greetings, opinions, questions about the hub machines, or announcing a topic with no request yet (e.g. "I want to work on retro" alone is chat, but it still names the project).',
     'project: the project it is about, using the conversation and the current focus for words like "it", "the project", "this"; "none" if unclear.',
     'revise: true only if the owner is changing or adding to the plan Jarvis just proposed instead of asking for something new.',
     'request: the owner\'s request restated as one self-contained sentence (resolve "it"/"that" from the conversation).',
-    'Answer JSON only: {"intent":"work|look|chat","project":"trading|retro|crease|x3|sixes|none","revise":false,"request":"..."}',
+    'Answer JSON only: {"intent":"work|look|chat","project":"trading|retro|crease|x3|sixes|hub|none","revise":false,"request":"..."}',
   ].join('\n');
   const user = [`Current focus project: ${focus ? NAME_OF[focus] : 'none'}`,
     lastPlan ? `Plan Jarvis proposed most recently (${lastPlan.id}, ${NAME_OF[lastPlan.repo]}): ${short(lastPlan.plan, 500)}` : '',
@@ -565,5 +577,46 @@ async function nightlySixesCheckpoint(cfg) {
   catch (e) { return `Nightly Sixes backup skipped: ${e.message.slice(0, 200)}`; }
 }
 
-module.exports = { handle, converse, focusOf, USAGE, interruptedAtStart, nightlySixesCheckpoint, _test: { APPROVE_RE, PROJECTS, exclusive },
+// A few phone-sized lines for `status`: is anything actually being worked on, and how far along.
+function ago(iso) { const m = Math.round((Date.now() - Date.parse(iso)) / 60000); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`; }
+function workStatus() {
+  const all = Object.values(state.tasks).sort((a, b) => b.n - a.n);
+  const lines = [];
+  const live = all.filter(t => t.status === 'working' || t.status === 'planning');
+  for (const t of live) {
+    const alive = running && running.id === t.id && running.child.exitCode === null;
+    let progress = '';
+    if (t.status === 'working' && t.machine === 'jarvis') {
+      try {
+        const wt = path.join(WORK_DIR, t.id);
+        const changed = git(wt, ['status', '--porcelain']).split('\n').filter(Boolean).length;
+        const commits = t.base ? git(wt, ['rev-list', '--count', `${t.base}..HEAD`]) : '0';
+        progress = ` · ${changed} file${changed === 1 ? '' : 's'} changed${+commits ? `, ${commits} commit${commits === '1' ? '' : 's'}` : ''} so far`;
+      } catch {}
+    }
+    const verb = t.status === 'planning' ? (t.kind === 'look' ? 'looking into' : 'planning') : 'working on';
+    lines.push(`- ▶️ **${t.id}** ${verb} ${NAME_OF[t.repo] || t.repo} with ${NAMES[t.agent] || 'an agent'}${t.machine === 'pa-pc' ? ' on the PA PC' : ''}, ${ago(t.approved || t.created)}${progress}${alive ? '' : ' (agent process not found: send `tasks`)'}\n  ${short(t.request, 90)}`);
+  }
+  if (!live.length && busy()) lines.push(`- ▶️ ${busy()}`);
+  if (queue.length) lines.push(`- ⏳ Waiting: ${queue.map(q => q.label.replace(/^a (plan|look) on /, '$1 on ')).join(', ')}`);
+  const ready = all.filter(t => t.status === 'planned').slice(0, 3);
+  if (ready.length) lines.push(`- ✋ Plan ready for your go: ${ready.map(t => `**${t.id}** (${NAME_OF[t.repo] || t.repo})`).join(', ')}`);
+  const recent = all.filter(t => ['done', 'failed'].includes(t.status))
+    .filter(t => Date.now() - Date.parse(t.finished || t.created) < 24 * 3600 * 1000).slice(0, 3);
+  if (recent.length) lines.push(`- Recent: ${recent.map(t => `${t.status === 'done' ? '✅' : '❌'} ${t.id} ${NAME_OF[t.repo] || t.repo}`).join(' · ')}`);
+  if (!lines.length) lines.push('- Idle: no agent work running or waiting.');
+  const rest = Object.entries(state.resting || {}).filter(([, until]) => until > Date.now());
+  if (rest.length) lines.push(`- ${rest.map(([a, until]) => `${NAMES[a]} at its limit until ${new Date(until).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`).join('; ')}`);
+  return '**Agent work**\n' + lines.join('\n');
+}
+
+// The PA PC worker: one-word maintenance operations (selfupdate, tools, status). Quietly reports if the PC is off.
+async function workerOp(op, cfg, timeoutMs = 10 * 60000) {
+  const m = machineFor('lax-sixes', cfg);
+  if (!fs.existsSync(m.key)) return `PA PC worker not set up yet (no key on Jarvis).`;
+  try { return await runProc('/usr/bin/ssh', cfg, HOME, sshArgs(m, `${op} T0 lax-sixes -`), timeoutMs, `pa-${op}`, 'the PA PC worker', ''); }
+  catch (e) { return `PA PC ${op} skipped: ${e.message.slice(0, 200)}`; }
+}
+
+module.exports = { handle, converse, focusOf, whenIdle, busyLabel, workerOp, workStatus, USAGE, interruptedAtStart, nightlySixesCheckpoint, _test: { APPROVE_RE, PROJECTS, exclusive },
   isTaskCommand: t => new RegExp(`^look\\s+(${Object.keys(PROJECTS).join('|')})\\b`, 'i').test(t.trim()) || /^(plan|approve|cancel|discard|tasks|agents)\b|^work\s+on\b|^(build|push|checkpoint)\s+sixes$|^sixes\s+status$|^confirm\s+(build|push)$/i.test(t.trim()) };
