@@ -33,12 +33,12 @@ dscl . -read /Groups/admin GroupMembership 2>/dev/null | grep -qw "$AGENT_USER" 
 
 say "1. Code -> $APP (root-owned)"
 mkdir -p "$APP"
-install -m 644 "$SRC/discord-bot.js" "$SRC/tasks.js" "$SRC/desk.js" "$SRC/package.json" "$APP/"
+install -m 644 "$SRC/discord-bot.js" "$SRC/tasks.js" "$SRC/desk.js" "$SRC/knowledge.js" "$SRC/package.json" "$APP/"
 install -m 644 "$SRC/jarvis-bot.env.example" "$APP/"
 ( cd "$APP" && PATH="$(dirname "$NODE"):$PATH" "$NPM" install --omit=dev --no-audit --no-fund --loglevel=error )
 chown -R root:wheel "$APP"
 chmod -R go-w "$APP"
-"$NODE" --check "$APP/discord-bot.js" && "$NODE" --check "$APP/tasks.js" && "$NODE" --check "$APP/desk.js" && echo "Code OK."
+"$NODE" --check "$APP/discord-bot.js" && "$NODE" --check "$APP/tasks.js" && "$NODE" --check "$APP/desk.js" && "$NODE" --check "$APP/knowledge.js" && echo "Code OK."
 
 say "2. Settings file $ENV_FILE"
 if [ ! -f "$ENV_FILE" ]; then
@@ -85,6 +85,30 @@ cat > "$PLIST" <<EOF
 EOF
 chown root:wheel "$PLIST"; chmod 644 "$PLIST"
 plutil -lint "$PLIST" >/dev/null && echo "Service file OK."
+
+say "4b. Knowledge base: nightly learning at 02:30 (com.pondboys.jarvis-learn, runs as $AGENT_USER, local only)"
+# Make sure every project Jarvis should learn has a read-only clone (skipped quietly if the GitHub key can't read it).
+for r in server-hub x3-discord-admin-ai; do
+  [ -d "$AGENT_HOME/projects/$r/.git" ] || sudo -u "$AGENT_USER" -H bash -lc "GIT_TERMINAL_PROMPT=0 git clone --quiet https://github.com/epondboys-dot/$r.git '$AGENT_HOME/projects/$r'" \
+    && echo "    projects/$r ready" || echo "    projects/$r: could not clone (add it to the read-only GitHub key)"
+done
+LEARN_PLIST=/Library/LaunchDaemons/com.pondboys.jarvis-learn.plist
+cat > "$LEARN_PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.pondboys.jarvis-learn</string>
+  <key>UserName</key><string>$AGENT_USER</string>
+  <key>ProgramArguments</key><array><string>$NODE</string><string>$APP/knowledge.js</string><string>learn</string></array>
+  <key>WorkingDirectory</key><string>$APP</string>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>2</integer><key>Minute</key><integer>30</integer></dict>
+  <key>StandardOutPath</key><string>$LOG_DIR/jarvis-learn.log</string>
+  <key>StandardErrorPath</key><string>$LOG_DIR/jarvis-learn.log</string>
+</dict></plist>
+EOF
+chown root:wheel "$LEARN_PLIST"; chmod 644 "$LEARN_PLIST"; plutil -lint "$LEARN_PLIST" >/dev/null
+launchctl bootout system/com.pondboys.jarvis-learn 2>/dev/null || true
+launchctl bootstrap system "$LEARN_PLIST" && echo "    nightly learning scheduled (first run tonight, or send 'learn' in Discord)"
 
 say "5. Start"
 launchctl bootout "system/$LABEL" 2>/dev/null || true
