@@ -250,11 +250,15 @@ client.on(Events.MessageCreate, async msg => {
 });
 
 // Daily morning post
-let lastPosted = '';
+let lastPosted = '', lastBackup = '';
 setInterval(async () => {
   const now = new Date();
   const hm = now.toTimeString().slice(0, 5);
   const day = now.toLocaleDateString('en-CA');
+  if (hm === '02:00' && lastBackup !== day) { // nightly Sixes working-folder backup on the PA PC; only problems are posted
+    lastBackup = day;
+    tasks.nightlySixesCheckpoint(cfg).then(r => { console.log(`${new Date().toISOString()} sixes nightly: ${r}`); if (r && /skipped/i.test(r) && client.isReady()) homeChannel().then(ch => send(ch, r)).catch(() => {}); });
+  }
   if (hm !== cfg.BRIEFING_TIME || lastPosted === day || !client.isReady()) return;
   lastPosted = day;
   try {

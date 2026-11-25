@@ -50,9 +50,10 @@ const RETRO_NOTE = 'This is Rewind Arcade. Run its checks with retro-test (unit)
 const X3_PY = '/Users/jarvis/projects/x3-discord-admin-ai/.venv/bin/python';
 const X3_NOTE = `This is the X3 Digital HQ Discord admin bot (Python). Run its tests with: ${X3_PY} -m unittest discover -s tests. ` +
   'Never start the bot, never contact Discord or Gemini, never add or print tokens or keys.';
-const SIXES_NOTE = 'This is the Sixes lacrosse game (Unreal Engine 5) on the PA PC. Follow the project docs and work orders. ' +
-  'Never commit .vsconfig or .slnx. Never run Unreal builds, the editor, UAT, UBT or cooking: builds need the owner\'s separate approval. ' +
-  'Code and text changes only; say which build or pad test the owner should run to check them.';
+const SIXES_NOTE = 'This is the Sixes lacrosse game (Unreal Engine 5.8) in the owner\'s working folder on the PA PC, which holds uncommitted work: ' +
+  'read CLAUDE.md and the latest Docs first and preserve existing local edits. Never change .vsconfig or .slnx. You have no shell: ' +
+  'make code and text edits only. Jarvis backs the folder up before and after, and the owner starts builds separately (`build sixes`); ' +
+  'finish by saying exactly what to build or pad-test to check your change.';
 function projectNote(repo) {
   return { 'ai-daytrading-bot': TRADING_RULES, 'the-crease': CREASE_NOTE, 'retro-game-platform': RETRO_NOTE,
     'x3-discord-admin-ai': X3_NOTE, 'lax-sixes': SIXES_NOTE }[repo] || '';
@@ -81,6 +82,7 @@ function save() {
 }
 
 let running = null; // { id, child }
+const pendingConfirm = new Map(); // owner -> { action: 'build'|'push', at }
 
 function git(cwd, args) {
   return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -193,7 +195,8 @@ const USAGE = [
   '- `plan <project> <what you want>`: read-only; replies with a plan and a task id. Jarvis picks Claude Code or Codex itself (switches when one hits its limit); add `--claude` or `--codex` to choose',
   '- `approve <id>`: carry out that plan in a separate copy on branch `jarvis/<id>`; commits there, never pushes',
   '- `tasks`: recent tasks · `cancel <id>`: stop a running task · `discard <id>`: delete its copy and branch',
-  '- Projects: trading, retro, crease, x3 (on Jarvis) · sixes (on the PA PC; agents never run builds)',
+  '- Projects: trading, retro, crease, x3 (on Jarvis) · sixes (on the PA PC, in its working folder, backed up to GitHub before and after)',
+  '- Sixes: `sixes status` · `checkpoint sixes` (backup, also nightly at 02:00) · `build sixes` · `push sixes` (both ask you to confirm)',
 ].join('\n');
 
 // "work on <plain words>": find the project (a project word in the text first, else the local model picks from the
@@ -224,6 +227,32 @@ async function handle(text, author, cfg, reply) {
     const where = REMOTE[PROJECTS[p]] ? 'the PA PC' : 'Jarvis';
     await reply(`That's **${p}** (${PROJECTS[p]}, runs on ${where}). Starting a read-only plan; nothing changes until you approve it.`);
     return handle(`plan ${p} ${request}`, author, cfg, reply);
+  }
+
+  // ---- Sixes on the PA PC: status, backups, builds, pushes (owner, Nov 25: as automated as possible) ----
+  // checkpoint and status run straight away; build and push ask the owner to confirm (Unreal builds are approved
+  // one at a time, Nov 23). The worker never force-pushes, so a push refuses if GitHub has newer work.
+  const sixesOp = /^(?:(build|push|checkpoint)\s+sixes|sixes\s+(status)|confirm\s+(build|push))$/i.exec(text.trim());
+  if (sixesOp) {
+    const m = machineFor('lax-sixes', cfg);
+    const run = async (op, timeoutMs) => {
+      if (running) return reply(`Busy with ${running.id}. Try again when it finishes.`);
+      try { return reply(await runProc('/usr/bin/ssh', cfg, HOME, sshArgs(m, `${op} T0 lax-sixes -`), timeoutMs, `sixes-${op}`, `the ${m.name} worker`, '')); }
+      catch (e) { return reply(`Sixes ${op} on the ${m.name}: ${e.message}`); }
+    };
+    const [, ask, stat, conf] = sixesOp.map(x => x && x.toLowerCase());
+    if (stat) return run('status', 60000);
+    if (ask === 'checkpoint') { await reply('Backing up the Sixes working folder on the PA PC to GitHub (the folder is not changed).'); return run('checkpoint', 10 * 60000); }
+    if (ask) {
+      pendingConfirm.set(author, { action: ask, at: Date.now() });
+      return reply(ask === 'build' ? 'Build Sixes on the PA PC now (SixesGameEditor, Win64 Development, about 5 to 30 minutes)? Type `confirm build` within 5 minutes.'
+        : 'Push the PA PC\'s current Sixes branch to GitHub (fast-forward only; it refuses if GitHub has newer work)? Type `confirm push` within 5 minutes.');
+    }
+    const p = pendingConfirm.get(author);
+    if (!p || p.action !== conf || Date.now() - p.at > 5 * 60000) return reply(`Nothing to confirm. Type \`${conf} sixes\` first.`);
+    pendingConfirm.delete(author);
+    if (conf === 'build') { await reply('Building Sixes on the PA PC. I\'ll post the result here.'); return run('build', 120 * 60000); }
+    return run('push', 10 * 60000);
   }
 
   if (v === 'agents') {
@@ -297,22 +326,21 @@ async function handle(text, author, cfg, reply) {
     if (machine) {
       // The worker on that machine makes the separate copy (branch jarvis/<id>), runs the agent and commits there.
       t.status = 'working'; t.approvedBy = author; t.approved = new Date().toISOString(); save();
-      await reply(`**${t.id}** approved. Working on the ${machine.name} in a separate copy on branch \`jarvis/${t.id}\`. This can take a while.`);
+      await reply(`**${t.id}** approved. Working in the Sixes folder on the ${machine.name}, with a GitHub backup before and after. This can take a while.`);
       const prompt = ['Carry out this plan, which the owner has approved. Stay within it; if something outside it is needed, stop and explain.',
         'Read any AGENTS.md, CLAUDE.md and README first and follow their rules.', projectNote(t.repo),
-        'Commit your work to the current branch with a clear message. Never push or change git remotes.',
+        'Leave your edits in the working folder; do not commit, push or change git settings (Jarvis backs up before and after).',
         'Finish with a short plain-text summary: what changed, anything the owner should check or build.',
         `Original request: ${t.request}`, `Approved plan:\n${t.plan}`].filter(Boolean).join('\n');
       try {
         const first = t.agent || 'claude', other = first === 'claude' ? 'codex' : 'claude';
         const res = await runAuto(restingUntil(first) > Date.now() ? [other, first] : [first, other], cfg, HOME, prompt, true, 45 * 60 * 1000, t.id, reply, machine);
         t.doneBy = res.agent; t.summary = res.out; t.status = 'done'; t.finished = new Date().toISOString(); save();
-        return reply([`**${t.id} done** on the ${machine.name} (${t.repo}, ${NAMES[t.doneBy] || ''}, branch \`jarvis/${t.id}\`)`, t.summary, '',
-          `Review it on the ${machine.name}, in the project folder:`, '```', `git log -p HEAD..jarvis/${t.id}`, `git push origin jarvis/${t.id}`, '```',
-          `Builds are yours to run after review. Or \`discard ${t.id}\` to throw it away.`].join('\n'));
+        return reply([`**${t.id} done** on the ${machine.name} (${t.repo}, ${NAMES[t.doneBy] || ''})`, t.summary, '',
+          'Next: `build sixes` to compile it (you confirm), `sixes status`, or `push sixes` once it is committed and the rigs are in sync.'].join('\n'));
       } catch (e) {
         t.status = 'failed'; t.error = e.message; save();
-        return reply(`**${t.id}** stopped on the ${machine.name}: ${e.message}\n\`discard ${t.id}\` removes its copy there.`);
+        return reply(`**${t.id}** stopped on the ${machine.name}: ${e.message}\nAny edits it made are in the working folder; the "before" backup branch on GitHub has the state from just before it started.`);
       }
     }
     const src = path.join(PROJECTS_DIR, t.repo);
@@ -385,4 +413,12 @@ async function handle(text, author, cfg, reply) {
   return null; // not a task command
 }
 
-module.exports = { handle, USAGE, interruptedAtStart, isTaskCommand: t => /^(plan|approve|cancel|discard|tasks|agents)\b|^work\s+on\b/i.test(t.trim()) };
+// Nightly backup of the Sixes working folder (non-destructive; skipped quietly if the PA PC is off).
+async function nightlySixesCheckpoint(cfg) {
+  if (running) return null;
+  try { return await runProc('/usr/bin/ssh', cfg, HOME, sshArgs(machineFor('lax-sixes', cfg), 'checkpoint T0 lax-sixes -'), 10 * 60000, 'sixes-nightly', 'the PA PC worker', ''); }
+  catch (e) { return `Nightly Sixes backup skipped: ${e.message.slice(0, 200)}`; }
+}
+
+module.exports = { handle, USAGE, interruptedAtStart, nightlySixesCheckpoint,
+  isTaskCommand: t => /^(plan|approve|cancel|discard|tasks|agents)\b|^work\s+on\b|^(build|push|checkpoint)\s+sixes$|^sixes\s+status$|^confirm\s+(build|push)$/i.test(t.trim()) };
