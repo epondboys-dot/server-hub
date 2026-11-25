@@ -25,11 +25,11 @@ sudo -u jarvis -H git clone -q https://github.com/epondboys-dot/server-hub.git /
 ```
 
 ## Known gaps
-- **FileVault:** after a power cut Jarvis turns itself back on but waits at the FileVault password, so Jarvis (Discord
-  bot, Ollama) stays off until someone types it. Owner decision to make: keep FileVault (safer if the Mac is stolen) or
-  turn it off for unattended recovery.
-- **tradingserver** cannot read the UPS. It loses power when the battery runs out and resumes on its own when power is
-  back, if its firmware is set to power on after a power loss (step below, optional).
+- **FileVault: turned off by owner decision (Nov 25, 2026)** so Jarvis starts unattended after a restart or power cut
+  (`sudo fdesetup disable`). Trade-off accepted: the disk is no longer encrypted if the Mac is taken; the hub-room lock
+  and the account password remain.
+- **tradingserver** cannot read the UPS. It loses power when the battery runs out and turns itself back on when power
+  returns (`tradingserver/power-on-after-outage.sh`, owner approved Nov 25).
 - **Desk runtime backups** need a live-safe backup in the desk code (today's tool needs the desk stopped). That is a
   Jarvis task: `plan trading add a live-safe nightly runtime backup ...`.
 
