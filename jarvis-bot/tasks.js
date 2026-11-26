@@ -26,6 +26,7 @@ const PROJECTS = {
   crease: 'the-crease', 'the-crease': 'the-crease',
   x3: 'x3-discord-admin-ai', 'x3-discord-admin-ai': 'x3-discord-admin-ai', gym: 'x3-discord-admin-ai',
   sixes: 'lax-sixes', 'lax-sixes': 'lax-sixes', lax: 'lax-sixes', lacrosse: 'lax-sixes', unreal: 'lax-sixes',
+  bridges: 'bridges-app', 'bridges-app': 'bridges-app', btb: 'bridges-app', brilliance: 'bridges-app', bridgemetric: 'bridges-app',
   hub: 'server-hub', 'server-hub': 'server-hub', updater: 'server-hub', jarvis: 'server-hub',
   'rewind-arcade': 'retro-game-platform', platform: 'retro-game-platform', 'trading-desk': 'ai-daytrading-bot',
 };
@@ -56,12 +57,17 @@ const SIXES_NOTE = 'This is the Sixes lacrosse game (Unreal Engine 5.8) in the o
   'read CLAUDE.md and the latest Docs first and preserve existing local edits. Never change .vsconfig or .slnx. You have no shell: ' +
   'make code and text edits only. Jarvis backs the folder up before and after, and the owner starts builds separately (`build sixes`); ' +
   'finish by saying exactly what to build or pad-test to check your change.';
+const BRIDGES_NOTE = 'This is the Bridges to Brilliance app (nonprofit; Base44 app with client, staff and doctor profiles). Its live app and every ' +
+  'client record stay on Base44: you only ever see code. Base44 syncs GitHub main straight into the LIVE app, so your work stays on your own branch ' +
+  'and the owner decides what reaches main. Never run the app or its tests against the live Base44 backend, never add real names or records, ' +
+  'use made-up sample data only, never add analytics, tracking or new data collection, and keep assessment scoring logic separate from any AI ' +
+  'explanation text. The users include neurodivergent people: keep wording plain, calm and literal. Flag anything touching personal or health data.';
 const HUB_NOTE = 'This is server-hub: the hub\'s own code (the Jarvis bot, the self-updater, setup scripts, the PA PC worker). ' +
   'Check changed files with node --check (JavaScript) and bash -n (shell). Never run install or setup scripts, never use sudo, ' +
   'never read or print tokens or settings files. Read /Library/Logs/hub-update.log and ~/Library/Logs/jarvis-bot.log if a problem needs them. ' +
   'Your fix reaches the machines only after the owner pushes your branch; the updater then installs it and rolls back if the bot does not stay up.';
 function projectNote(repo) {
-  return { 'server-hub': HUB_NOTE, 'ai-daytrading-bot': TRADING_RULES, 'the-crease': CREASE_NOTE, 'retro-game-platform': RETRO_NOTE,
+  return { 'bridges-app': BRIDGES_NOTE, 'server-hub': HUB_NOTE, 'ai-daytrading-bot': TRADING_RULES, 'the-crease': CREASE_NOTE, 'retro-game-platform': RETRO_NOTE,
     'x3-discord-admin-ai': X3_NOTE, 'lax-sixes': SIXES_NOTE }[repo] || '';
 }
 
@@ -217,7 +223,7 @@ function resolveProject(word) {
 
 function short(s, n = 80) { s = String(s).replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
 
-const PROJECT_LIST = 'trading|retro|crease|x3|sixes|hub';
+const PROJECT_LIST = 'trading|retro|crease|x3|sixes|bridges|hub';
 const USAGE = [
   '**Agent tasks** (Claude Code or Codex; nothing reaches GitHub without you)',
   '- **Just talk to me.** "what\'s next on retro", "fix the login bug in x3", "take a look at the project": I work out the project (and remember it for follow-ups), read it with Claude Code or Codex, and bring back a plan. Say `go` to carry it out, or tell me what to change. Questions about a project ("how does scoring work in sixes?") get an answer from the files. Anything new while an agent works waits in line; nothing gets interrupted. `stop` stops the running job.',
@@ -225,7 +231,7 @@ const USAGE = [
   '- `plan <project> <what you want>`: read-only; replies with a plan and a task id. Jarvis picks Claude Code or Codex itself (switches when one hits its limit); add `--claude` or `--codex` to choose',
   '- `approve <id>`: carry out that plan in a separate copy on branch `jarvis/<id>`; commits there, never pushes',
   '- `tasks`: recent tasks · `cancel <id>`: stop a running task · `discard <id>`: delete its copy and branch',
-  '- Projects: trading, retro, crease, x3, hub (Jarvis\'s own code) (on Jarvis) · sixes (on the PA PC, in its working folder, backed up to GitHub before and after)',
+  '- Projects: trading, retro, crease, x3, bridges, hub (Jarvis\'s own code) (on Jarvis) · sixes (on the PA PC, in its working folder, backed up to GitHub before and after)',
   '- Sixes: `sixes status` · `checkpoint sixes` (backup, also nightly at 02:00) · `build sixes` · `push sixes` (both ask you to confirm)',
 ].join('\n');
 
@@ -469,7 +475,7 @@ async function handle(text, author, cfg, reply, ctx = {}) {
 // changes until the owner says go. Approval is never decided by the model: only an owner's plain yes/go counts.
 const APPROVE_RE = /^(yes|yeah|yep|yup|go|go ahead|go for it|do it|approve|approved|ok go|ok do it|run it|send it|ship it|proceed|sounds good|lets do it|let's do it|lgtm)[.! ]*$/i;
 const STOP_RE = /^(stop|cancel|stop it|cancel it|abort)[.! ]*$/i;
-const NAME_OF = { 'server-hub': 'hub', 'ai-daytrading-bot': 'trading', 'retro-game-platform': 'retro', 'the-crease': 'crease', 'x3-discord-admin-ai': 'x3', 'lax-sixes': 'sixes' };
+const NAME_OF = { 'bridges-app': 'bridges', 'server-hub': 'hub', 'ai-daytrading-bot': 'trading', 'retro-game-platform': 'retro', 'the-crease': 'crease', 'x3-discord-admin-ai': 'x3', 'lax-sixes': 'sixes' };
 const pendingAsk = new Map(); // channel -> request waiting for "which project?"
 
 function latestTask(channel, statuses, maxAgeMs = 6 * 3600 * 1000) {
@@ -503,6 +509,7 @@ async function classify(text, cfg, history, focus, lastPlan, actions = {}, prev 
     'You route messages for Jarvis, the owner\'s hub assistant. Do not answer the message; only classify it.',
     'Projects: trading (AI trading desk: paper trading, market map, Alpaca), retro (Rewind Arcade, the retro/indie browser game platform and store),',
     'crease (The Crease lacrosse highlight video engine), x3 (X3 gym Discord admin bot), sixes (Sixes lacrosse video game in Unreal Engine),',
+    'bridges (Bridges to Brilliance, the nonprofit\'s Base44 app: assessments, client/staff/doctor profiles),',
     'hub (the hub\'s own code: Jarvis himself, his commands, the self-updater, machine setup scripts, the PA PC worker).',
     'intent "action": Jarvis can answer or do this himself right now, without an agent, using one of these (pick its name as "action"):',
     ...Object.entries(actions).map(([k, a]) => `  ${k}: ${a.desc}`),
@@ -514,7 +521,7 @@ async function classify(text, cfg, history, focus, lastPlan, actions = {}, prev 
     'revise: true only if the owner is changing or adding to the plan Jarvis just proposed instead of asking for something new.',
     'request: the owner\'s request restated as one self-contained sentence (resolve "it"/"that" from the conversation).',
     'corrects_previous: true if the owner is saying Jarvis misunderstood the previous message (e.g. "no", "I don\'t want a task, I want a report", "I meant ...", "not that"); then classify what they actually want.',
-    'Answer JSON only: {"intent":"action|work|look|chat","action":"<name or none>","project":"trading|retro|crease|x3|sixes|hub|none","revise":false,"corrects_previous":false,"request":"..."}',
+    'Answer JSON only: {"intent":"action|work|look|chat","action":"<name or none>","project":"trading|retro|crease|x3|sixes|bridges|hub|none","revise":false,"corrects_previous":false,"request":"..."}',
   ].join('\n');
   const learned = loadPhrases().slice(-40).map(p => `"${p.text}" -> ${JSON.stringify(p.route)}`).join('\n');
   const user = [learned ? `Phrases the owner has taught (follow these):\n${learned}` : '',
