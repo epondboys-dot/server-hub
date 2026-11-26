@@ -17,6 +17,15 @@
 # 'Continue' on purpose: Windows PowerShell turns any stderr line from git/claude into a terminating error under
 # 'Stop' (git prints progress there even on success). Failures are checked through exit codes instead.
 $ErrorActionPreference = 'Continue'
+# GitHub sign-in: over SSH, Windows cannot open the owner's saved GitHub login (Credential Manager needs a desktop
+# sign-in), so the worker uses its own fine-grained token (lax-sixes read/write, server-hub read only), kept in an
+# admin-only file by setup-pa-pc-worker.ps1. The owner's own Git on the desktop is untouched.
+$env:GCM_INTERACTIVE = 'never'; $env:GIT_TERMINAL_PROMPT = '0'
+if (Test-Path 'C:\ProgramData\jarvis-worker\git-credentials') {
+  $env:GIT_CONFIG_COUNT = '2'
+  $env:GIT_CONFIG_KEY_0 = 'credential.helper'; $env:GIT_CONFIG_VALUE_0 = ''   # drop the desktop-only helper
+  $env:GIT_CONFIG_KEY_1 = 'credential.helper'; $env:GIT_CONFIG_VALUE_1 = 'store --file=C:/ProgramData/jarvis-worker/git-credentials'
+}
 $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $Repos = @{ 'lax-sixes' = @{ Path = 'G:\AI-Projects\lax-sixes'; Build = 'Lax Video Game\Build_DevelopmentEditor.bat'; Exclude = @(':(exclude,glob)**/.vsconfig', ':(exclude,glob)**/*.slnx') } }
 $WorkRoot = 'G:\AI-Projects\_jarvis-work'

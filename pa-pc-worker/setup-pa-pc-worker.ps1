@@ -40,10 +40,37 @@ New-Item -ItemType Directory -Force $dir | Out-Null
 Copy-Item (Join-Path $PSScriptRoot 'jarvis-worker.ps1') (Join-Path $dir 'jarvis-worker.ps1') -Force
 icacls $dir /inheritance:r /grant 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' "${env:USERNAME}:(OI)(CI)RX" | Out-Null
 
-Write-Host '=== 4. Jarvis key with a forced command'
-$raw = (Invoke-WebRequest -UseBasicParsing $KeyUrl -TimeoutSec 20).Content
-if ($raw -is [byte[]]) { $raw = [Text.Encoding]::ASCII.GetString($raw) }  # .pub files arrive as bytes from Python's file share
-$pub = ([string]$raw).Trim()
+Write-Host '=== 4. GitHub token for the worker (only asked once)'
+$credFile = Join-Path $dir 'git-credentials'
+if (-not (Test-Path $credFile)) {
+  Write-Host '    Over SSH, Windows cannot use your saved GitHub login, so the worker needs its own token.'
+  Write-Host '    GitHub > Settings > Developer settings > Fine-grained tokens > Generate new token:'
+  Write-Host '      name "PA PC worker", repositories: lax-sixes and server-hub,'
+  Write-Host '      permission Contents: Read and write (server-hub only gets read in practice; the worker never pushes it).'
+  $sec = Read-Host '    Paste the token here (nothing will show)' -AsSecureString
+  $tok = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
+  if ($tok -notmatch '^(github_pat_|ghp_)[A-Za-z0-9_]+$') { throw 'That does not look like a GitHub token; run this script again.' }
+  Set-Content -Path $credFile -Value "https://epondboys-dot:$tok@github.com" -Encoding ascii -NoNewline
+  icacls $credFile /inheritance:r /grant 'Administrators:F' 'SYSTEM:F' | Out-Null
+  $tok = $null
+}
+$env:GCM_INTERACTIVE = 'never'; $env:GIT_TERMINAL_PROMPT = '0'
+$ok = & git.exe -c credential.helper= -c "credential.helper=store --file=C:/ProgramData/jarvis-worker/git-credentials" ls-remote https://github.com/epondboys-dot/lax-sixes.git HEAD 2>&1
+if ($LASTEXITCODE -ne 0) { Remove-Item $credFile -Force -ErrorAction SilentlyContinue; throw "GitHub refused the token for lax-sixes ($ok). Check its repositories/permissions and run this script again." }
+Write-Host '    GitHub token works for lax-sixes.'
+
+Write-Host '=== 5. Jarvis key with a forced command'
+$auth = 'C:\ProgramData\ssh\administrators_authorized_keys'
+try {
+  $raw = (Invoke-WebRequest -UseBasicParsing $KeyUrl -TimeoutSec 20).Content
+  if ($raw -is [byte[]]) { $raw = [Text.Encoding]::ASCII.GetString($raw) }  # .pub files arrive as bytes from Python's file share
+  $pub = ([string]$raw).Trim()
+} catch {
+  $existing = if (Test-Path $auth) { Get-Content $auth | Where-Object { $_ -match 'jarvis-worker' } | Select-Object -First 1 } else { $null }
+  if (-not $existing) { throw "Couldn't get Jarvis's key from $KeyUrl. Start the key share on Jarvis (pa-pc-worker README step 1) and run this again." }
+  $pub = ($existing -replace '^.*no-pty\s+', '').Trim()
+  Write-Host '    Jarvis is not sharing a key right now; keeping the key already installed.'
+}
 if ($pub -notmatch '^ssh-ed25519 [A-Za-z0-9+/=]+( .*)?$') { throw "That doesn't look like an ed25519 public key: $pub" }
 $force = "command=`"powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $dir\jarvis-worker.ps1`",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty"
 $auth = 'C:\ProgramData\ssh\administrators_authorized_keys'
