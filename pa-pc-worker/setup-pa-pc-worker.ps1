@@ -13,13 +13,24 @@ $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 if (-not $admin) { throw 'Run this in an Administrator PowerShell.' }
 
 Write-Host '=== 1. OpenSSH server'
-$cap = Get-WindowsCapability -Online -Name 'OpenSSH.Server*' | Select-Object -First 1
-if ($cap.State -ne 'Installed') { Add-WindowsCapability -Online -Name $cap.Name | Out-Null }
+if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
+  $ok = $false
+  try {
+    $cap = Get-WindowsCapability -Online -Name 'OpenSSH.Server*' -ErrorAction Stop | Select-Object -First 1
+    if ($cap.State -ne 'Installed') { Add-WindowsCapability -Online -Name $cap.Name -ErrorAction Stop | Out-Null }
+    $ok = $true
+  } catch { Write-Host "    Windows' built-in package is unavailable on this build ($($_.Exception.Message.Split([char]10)[0])); installing Microsoft's OpenSSH from winget instead" }
+  if (-not $ok -or -not (Get-Service sshd -ErrorAction SilentlyContinue)) {
+    winget install --id Microsoft.OpenSSH.Preview -e --source winget --scope machine --silent --accept-source-agreements --accept-package-agreements
+    if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) { throw 'OpenSSH server did not install. Send Claude a photo of this window.' }
+  }
+}
 Set-Service sshd -StartupType Automatic; Start-Service sshd
 Write-Host "    sshd: $((Get-Service sshd).Status)"
 
 Write-Host "=== 2. Firewall: SSH only from Jarvis ($JarvisIp)"
-Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue | Disable-NetFirewallRule
+# Close any open-to-everyone SSH rule (built-in or winget installer); only the Jarvis rule below stays.
+Get-NetFirewallRule -Direction Inbound -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'Jarvis-Worker-SSH' -and ($_.Name -match 'OpenSSH|sshd' -or $_.DisplayName -match 'OpenSSH|sshd') } | Disable-NetFirewallRule
 Get-NetFirewallRule -Name 'Jarvis-Worker-SSH' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 New-NetFirewallRule -Name 'Jarvis-Worker-SSH' -DisplayName 'SSH from Jarvis only (worker)' -Direction Inbound -Protocol TCP -LocalPort 22 -RemoteAddress $JarvisIp -Action Allow -Profile Any | Out-Null
 
