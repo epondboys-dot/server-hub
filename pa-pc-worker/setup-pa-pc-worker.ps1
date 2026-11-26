@@ -41,7 +41,9 @@ Copy-Item (Join-Path $PSScriptRoot 'jarvis-worker.ps1') (Join-Path $dir 'jarvis-
 icacls $dir /inheritance:r /grant 'Administrators:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' "${env:USERNAME}:(OI)(CI)RX" | Out-Null
 
 Write-Host '=== 4. Jarvis key with a forced command'
-$pub = (Invoke-WebRequest -UseBasicParsing $KeyUrl -TimeoutSec 20).Content.Trim()
+$raw = (Invoke-WebRequest -UseBasicParsing $KeyUrl -TimeoutSec 20).Content
+if ($raw -is [byte[]]) { $raw = [Text.Encoding]::ASCII.GetString($raw) }  # .pub files arrive as bytes from Python's file share
+$pub = ([string]$raw).Trim()
 if ($pub -notmatch '^ssh-ed25519 [A-Za-z0-9+/=]+( .*)?$') { throw "That doesn't look like an ed25519 public key: $pub" }
 $force = "command=`"powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $dir\jarvis-worker.ps1`",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty"
 $auth = 'C:\ProgramData\ssh\administrators_authorized_keys'
