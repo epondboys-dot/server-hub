@@ -129,7 +129,7 @@ for f in $(git diff --name-only "$OLD" "$NEW" -- '*.js'); do [ -f "$f" ] && { no
 systemctl --user restart trading-desk.service; sleep 20
 if systemctl --user is-active -q trading-desk.service; then
   systemctl --user restart trading-desk-gateway.service 2>/dev/null
-  echo "Desk updated $(git rev-parse --short "$OLD") -> $(git rev-parse --short "$NEW"), version $(node -p "require('./package.json').version" 2>/dev/null): $(git log -1 --format=%s | cut -c1-90)"
+  echo "Desk updated $(git rev-parse --short "$OLD") -> $(git rev-parse --short "$NEW"), version $(node -p "require('./control-center/package.json').version" 2>/dev/null): $(git log -1 --format=%s | cut -c1-90)"
 else
   git reset -q --hard "$OLD"; systemctl --user restart trading-desk.service
   echo "ROLLED BACK: the desk did not stay up on the new code; it is back on $(git rev-parse --short "$OLD")."; exit 7
