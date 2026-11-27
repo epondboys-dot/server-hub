@@ -17,7 +17,14 @@ ADMIN_USER=""; TRADING_HOST=100.111.197.47
 mkdir -p "$OUTD"; exec >>/Library/Logs/hub-update.log 2>&1
 echo; echo "=== $(date '+%F %T') hub-update"
 
-bot_running() { launchctl print "system/$LABEL" 2>/dev/null | awk '/state = /{s=$3} /pid = /{p=$3} END{ if (s=="running") print p }'; }
+# The job's own state and pid are the FIRST "state =" / "pid =" lines; later ones belong to nested sections.
+bot_running() { launchctl print "system/$LABEL" 2>/dev/null | awk '$1=="state" && $2=="=" && !s {s=$3} $1=="pid" && $2=="=" && !p {p=$3} END{ if (s=="running") print p }'; }
+# Stop-then-start can race on macOS ("Bootstrap failed: 5"): retry, then fall back to kickstart.
+restart_bot() {
+  launchctl bootout "system/$LABEL" 2>/dev/null; sleep 3
+  for i in 1 2 3; do launchctl bootstrap system "/Library/LaunchDaemons/$LABEL.plist" 2>/dev/null && break; sleep 5; done
+  launchctl kickstart -k "system/$LABEL" 2>/dev/null || true
+}
 
 # Read and clear the queue (only plain files, only lowercase words).
 modes=""
@@ -59,13 +66,13 @@ update_hub() {
         bad "the bot did not stay up on ${NEW:0:7}; restoring the previous version"
         if [ -d "$APP.prev" ]; then rm -rf "$APP"; mv "$APP.prev" "$APP"; fi
         echo "$NEW" > "$OUTD/bad-hub-version"
-        launchctl bootout "system/$LABEL" 2>/dev/null; launchctl bootstrap system "/Library/LaunchDaemons/$LABEL.plist"
+        restart_bot
       fi
     else
       bad "installer stopped at ${NEW:0:7}; restoring the previous version"
       if [ -d "$APP.prev" ]; then rm -rf "$APP"; mv "$APP.prev" "$APP"; fi
       echo "$NEW" > "$OUTD/bad-hub-version"
-      launchctl bootout "system/$LABEL" 2>/dev/null; launchctl bootstrap system "/Library/LaunchDaemons/$LABEL.plist"
+      restart_bot
     fi
     rm -rf "$ST"
   fi
@@ -144,7 +151,7 @@ for m in $(echo "$modes" | tr ' ' '\n' | awk 'NF && !seen[$0]++'); do
   case "$m" in hub) update_hub ;; tools) update_tools ;; desk) update_desk ;; *) echo "ignored request '$m'" ;; esac
 done
 if [ -n "${FALLBACK:-}" ] && [ -z "$(bot_running)" ]; then
-  launchctl bootout "system/$LABEL" 2>/dev/null; launchctl bootstrap system "/Library/LaunchDaemons/$LABEL.plist"; sleep 15
+  restart_bot; sleep 15
   if [ -n "$(bot_running)" ]; then note "Jarvis was down overnight; restarted him."; else bad "Jarvis is down and would not restart; see ~jarvis/Library/Logs/jarvis-bot.log"; fi
 fi
 { echo "id $(date +%s)"; echo "ok $ok"; printf '%s\n' "${report[@]}"; } > "$RESULT.tmp" && chmod 644 "$RESULT.tmp" && mv "$RESULT.tmp" "$RESULT"
