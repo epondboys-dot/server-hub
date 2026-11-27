@@ -21,11 +21,11 @@ $ErrorActionPreference = 'Continue'
 # sign-in), so the worker uses its own fine-grained token (lax-sixes read/write, server-hub read only), kept in an
 # admin-only file by setup-pa-pc-worker.ps1. The owner's own Git on the desktop is untouched.
 $env:GCM_INTERACTIVE = 'never'; $env:GIT_TERMINAL_PROMPT = '0'
-if (Test-Path 'C:\ProgramData\jarvis-worker\git-credentials') {
-  $env:GIT_CONFIG_COUNT = '2'
-  $env:GIT_CONFIG_KEY_0 = 'credential.helper'; $env:GIT_CONFIG_VALUE_0 = ''   # drop the desktop-only helper
-  $env:GIT_CONFIG_KEY_1 = 'credential.helper'; $env:GIT_CONFIG_VALUE_1 = 'store --file=C:/ProgramData/jarvis-worker/git-credentials'
-}
+# (Passed on every git call: an empty helper drops the desktop-only one, then the worker's own file is used.
+#  PowerShell deletes environment variables set to '', so this cannot go through GIT_CONFIG_* variables.)
+$GitAuth = if (Test-Path 'C:\ProgramData\jarvis-worker\git-credentials') {
+  @('-c', 'credential.helper=', '-c', 'credential.helper=store --file=C:/ProgramData/jarvis-worker/git-credentials')
+} else { @() }
 $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $Repos = @{ 'lax-sixes' = @{ Path = 'G:\AI-Projects\lax-sixes'; Build = 'Lax Video Game\Build_DevelopmentEditor.bat'; Exclude = @(':(exclude,glob)**/.vsconfig', ':(exclude,glob)**/*.slnx') } }
 $WorkRoot = 'G:\AI-Projects\_jarvis-work'
@@ -40,7 +40,7 @@ $action, $id, $repoName, $agent = $Matches[1], $Matches[2], $Matches[3], $Matche
 if (-not $Repos.ContainsKey($repoName)) { Fail "Unknown project '$repoName' on this machine" }
 $P = $Repos[$repoName]; $repo = $P.Path
 Note "$action $id $repoName $agent"
-function G { $out = & git.exe -C $repo @args 2>&1; if ($LASTEXITCODE -ne 0) { throw "git $($args -join ' '): $($out -join ' ')" }; $out }
+function G { $out = & git.exe @GitAuth -C $repo @args 2>&1; if ($LASTEXITCODE -ne 0) { throw "git $($args -join ' '): $($out -join ' ')" }; $out }
 
 # Back up everything in the working folder to a new branch without touching the folder, index or branch:
 # a private index starts from HEAD, takes every change (respecting .gitignore, minus local VS files), becomes a
@@ -68,10 +68,10 @@ switch ($action) {
   'selfupdate' {
     $env:GCM_INTERACTIVE = 'never'; $env:GIT_TERMINAL_PROMPT = '0'
     $src = 'C:\ProgramData\jarvis-worker\src'
-    if (-not (Test-Path "$src\.git")) { $o = & git.exe clone -q --depth 1 https://github.com/epondboys-dot/server-hub.git $src 2>&1 }
-    else { $o = & git.exe -C $src fetch -q --depth 1 origin main 2>&1; if ($LASTEXITCODE -eq 0) { $o = & git.exe -C $src reset -q --hard FETCH_HEAD 2>&1 } }
+    if (-not (Test-Path "$src\.git")) { $o = & git.exe @GitAuth clone -q --depth 1 https://github.com/epondboys-dot/server-hub.git $src 2>&1 }
+    else { $o = & git.exe @GitAuth -C $src fetch -q --depth 1 origin main 2>&1; if ($LASTEXITCODE -eq 0) { $o = & git.exe @GitAuth -C $src reset -q --hard FETCH_HEAD 2>&1 } }
     if ($LASTEXITCODE -ne 0) { Fail "Couldn't get server-hub from GitHub on this PC: $($o -join ' ')" }
-    $new = Join-Path $src 'pa-pc-worker\jarvis-worker.ps1'; $rev = (& git.exe -C $src rev-parse --short HEAD)
+    $new = Join-Path $src 'pa-pc-worker\jarvis-worker.ps1'; $rev = (& git.exe @GitAuth -C $src rev-parse --short HEAD)
     if (-not (Test-Path $new)) { Fail "server-hub $rev has no pa-pc-worker\jarvis-worker.ps1" }
     $errs = $null; [void][System.Management.Automation.Language.Parser]::ParseFile($new, [ref]$null, [ref]$errs)
     if ($errs -and $errs.Count) { Fail "server-hub $rev worker has syntax errors; kept the current one: $($errs[0].Message)" }
@@ -92,8 +92,8 @@ switch ($action) {
     G fetch --quiet origin | Out-Null
     $b = (G rev-parse --abbrev-ref HEAD | Select-Object -Last 1).Trim()
     $ab = (G rev-list --left-right --count "HEAD...origin/$b" | Select-Object -Last 1).Trim() -split '\s+'
-    $changed = @(& git.exe -C $repo status --porcelain).Count
-    $last = (& git.exe -C $repo ls-remote --heads origin 'checkpoint/pa-*' | ForEach-Object { ($_ -split "`t")[1] -replace '^refs/heads/', '' } | Sort-Object | Select-Object -Last 1)
+    $changed = @(& git.exe @GitAuth -C $repo status --porcelain).Count
+    $last = (& git.exe @GitAuth -C $repo ls-remote --heads origin 'checkpoint/pa-*' | ForEach-Object { ($_ -split "`t")[1] -replace '^refs/heads/', '' } | Sort-Object | Select-Object -Last 1)
     Write-Output "Sixes on the PA PC: branch $b, $($ab[0]) ahead / $($ab[1]) behind GitHub, $changed changed or new files. Last checkpoint: $(if ($last) { $last } else { 'none yet' })."
     exit 0
   }
@@ -101,7 +101,7 @@ switch ($action) {
   'push' {
     $b = (G rev-parse --abbrev-ref HEAD | Select-Object -Last 1).Trim()
     if ($b -notmatch '^[A-Za-z0-9._/-]+$' -or $b -eq 'HEAD') { Fail "Not on a named branch ($b); nothing pushed." }
-    $out = & git.exe -C $repo push origin "HEAD:refs/heads/$b" 2>&1   # never --force
+    $out = & git.exe @GitAuth -C $repo push origin "HEAD:refs/heads/$b" 2>&1   # never --force
     if ($LASTEXITCODE -ne 0) { Fail "Push refused (nothing overwritten). GitHub likely has newer commits on $b; sync the rigs first.`n$($out -join "`n")" 4 }
     Write-Output "Pushed $b to GitHub (fast-forward only). Uncommitted changes are not part of a push; checkpoints back those up."
     exit 0
@@ -122,8 +122,8 @@ switch ($action) {
   }
   'discard' {
     $wt = Join-Path $WorkRoot $id
-    if (Test-Path $wt) { & git.exe -C $repo worktree remove --force $wt 2>&1 | Out-Null }
-    & git.exe -C $repo worktree prune 2>&1 | Out-Null; & git.exe -C $repo branch -D "jarvis/$id" 2>&1 | Out-Null
+    if (Test-Path $wt) { & git.exe @GitAuth -C $repo worktree remove --force $wt 2>&1 | Out-Null }
+    & git.exe @GitAuth -C $repo worktree prune 2>&1 | Out-Null; & git.exe @GitAuth -C $repo branch -D "jarvis/$id" 2>&1 | Out-Null
     Write-Output "Removed any old copy for $id. The working folder was not changed."; exit 0
   }
 }
@@ -160,7 +160,7 @@ $summary = RunAgent $true
 $after = Checkpoint "after $id"
 Write-Output $summary
 Write-Output '```'
-& git.exe -C $repo diff --stat $before.Tree $after.Tree | Select-Object -Last 15
+& git.exe @GitAuth -C $repo diff --stat $before.Tree $after.Tree | Select-Object -Last 15
 Write-Output '```'
 if ($before.Tree -eq $after.Tree) { Write-Output 'No files changed.' }
 Write-Output "Backups on GitHub: before = $($before.Ref), after = $($after.Ref). To undo this task: git restore --source $($before.Commit.Substring(0,10)) --worktree -- ."
