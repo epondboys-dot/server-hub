@@ -5,7 +5,12 @@
 set -e
 REPO=/Users/jarvis/projects/retro-game-platform
 export PATH="/opt/homebrew/opt/node@24/bin:/Users/jarvis/.local/bin:/opt/homebrew/bin:$PATH"
-[ -d node_modules ] || ln -s "$REPO/node_modules" node_modules
+if [ ! -e node_modules ]; then
+  ln -s "$REPO/node_modules" node_modules
+  # Keep the link out of commits: .gitignore's "node_modules/" does not match a symlink (T11 committed one, Nov 27).
+  EX="$(git rev-parse --git-common-dir 2>/dev/null)/info/exclude"
+  [ -f "$EX" ] && ! grep -qx 'node_modules' "$EX" && echo 'node_modules' >> "$EX"
+fi
 limit() { local s=$1; shift; perl -e '$SIG{ALRM}=sub{print STDERR "\nretro-test: stopped after '"$s"' seconds (time limit). Treat it as a failure; do not rerun the same thing unchanged.\n"; kill "TERM", -$$; exit 124}; alarm shift; setpgrp(0,0); $p=fork; if(!$p){exec @ARGV} waitpid($p,0); exit($?>>8)' "$s" "$@"; }
 case "${1:-test}" in
   test)    limit 300 node --test tests/*.test.js ;;
