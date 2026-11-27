@@ -256,7 +256,7 @@ async function routeProject(text, cfg) {
 
 async function handle(text, author, cfg, reply, ctx = {}) {
   const [verb, ...rest] = text.trim().split(/\s+/);
-  const v = verb.toLowerCase();
+  let v = verb.toLowerCase();
 
   if (v === 'work' && (rest[0] || '').toLowerCase() === 'on') {
     const request = rest.slice(1).join(' ').trim();
@@ -320,7 +320,8 @@ async function handle(text, author, cfg, reply, ctx = {}) {
     const order = pickOrder(forced);
     let agent = order[0];
     const proj = resolveProject(words[0]);
-    const request = words.slice(1).join(' ').trim();
+    // `plan retro` on its own means "what's next on retro" (owner, Nov 27).
+    const request = words.slice(1).join(' ').trim() || (proj ? 'What is next? Read the status, plan, handoff and work-order documents and plan the most valuable next step.' : '');
     if (!proj || !request) return reply(`Usage: \`plan <${PROJECT_LIST}> <what you want>\``);
     const kind = v;
     if (!ctx.live && ctx.liveFor) { try { ctx = { ...ctx, live: await ctx.liveFor(proj.repo) }; } catch {} }
@@ -372,11 +373,14 @@ async function handle(text, author, cfg, reply, ctx = {}) {
     });
   }
 
+  if (v === 'retry') v = 'approve';
   if (v === 'approve') {
     const t = state.tasks[String(rest[0] || '').toUpperCase()];
     if (!t) return reply('Usage: `approve <id>` (see `tasks`)');
-    if (!['planned', 'interrupted'].includes(t.status)) return reply(`${t.id} is ${t.status}; only a planned or interrupted task can be approved.`);
-    if (t.status === 'interrupted') { // start the approved work over from a clean copy
+    // A failed task can be run again from its plan (`approve T11` or `retry T11`, owner Nov 27).
+    if (t.status === 'failed' && !t.plan) return reply(`${t.id} failed before it had a plan; ask for it again (for example \`plan ${NAME_OF[t.repo] || t.repo} ${short(t.request, 60)}\`).`);
+    if (!['planned', 'interrupted', 'failed'].includes(t.status)) return reply(`${t.id} is ${t.status}; only a planned, interrupted or failed task can be approved.`);
+    if (t.status === 'interrupted' || t.status === 'failed') { // start the approved work over from a clean copy
       const src0 = path.join(PROJECTS_DIR, t.repo);
       try { git(src0, ['worktree', 'remove', '--force', path.join(WORK_DIR, t.id)]); } catch {}
       try { git(src0, ['worktree', 'prune']); } catch {}
@@ -389,7 +393,7 @@ async function handle(text, author, cfg, reply, ctx = {}) {
     if (machine) {
       // The worker on that machine makes the separate copy (branch jarvis/<id>), runs the agent and commits there.
       t.status = 'working'; t.approvedBy = author; t.approved = new Date().toISOString(); save();
-      await reply(`**${t.id}** approved. Working in the Sixes folder on the ${machine.name}, with a GitHub backup before and after. This can take a while.`);
+      await reply(`**${t.id}** approved. Working in the ${t.repo === 'the-crease' ? 'Crease' : 'Sixes'} folder on the ${machine.name}, with a GitHub backup before and after. This can take a while.`);
       const prompt = ['Carry out this plan, which the owner has approved. Stay within it; if something outside it is needed, stop and explain.',
         'Read any AGENTS.md, CLAUDE.md and README first and follow their rules.', projectNote(t.repo),
         'Leave your edits in the working folder; do not commit, push or change git settings (Jarvis backs up before and after).',
@@ -557,7 +561,11 @@ async function converse(text, author, cfg, reply, ctx = {}) {
 
   if (APPROVE_RE.test(t0)) {
     const t = latestTask(channel, ['planned']);
-    if (!t) return false;
+    if (!t) {
+      const failed = latestTask(channel, ['failed'], 3 * 24 * 3600 * 1000);
+      await reply(`Nothing is waiting for your go.${failed ? ` ${failed.id} (${NAME_OF[failed.repo] || failed.repo}) failed earlier: \`retry ${failed.id}\` runs it again from its plan.` : ' Tell me what you want done, or `tasks` to see recent work.'}`);
+      return true;
+    }
     return handle(`approve ${t.id}`, author, cfg, reply, ctx).then(() => true);
   }
   // "Go, and then ..." / "yes and also ...": approve the plan on the table first, then treat the rest as the next request
@@ -691,4 +699,4 @@ async function workerOp(op, cfg, timeoutMs = 10 * 60000) {
 }
 
 module.exports = { loadPhrases, savePhrases, handle, converse, focusOf, whenIdle, busyLabel, workerOp, workStatus, USAGE, interruptedAtStart, nightlySixesCheckpoint, _test: { APPROVE_RE, PROJECTS, exclusive },
-  isTaskCommand: t => new RegExp(`^look\\s+(${Object.keys(PROJECTS).join('|')})\\b`, 'i').test(t.trim()) || /^(plan|approve|cancel|discard|tasks|agents)\b|^work\s+on\b|^(build|test|push|checkpoint)\s+(sixes|crease)$|^(sixes|crease)\s+status$|^confirm\s+(build|push)$/i.test(t.trim()) };
+  isTaskCommand: t => new RegExp(`^look\\s+(${Object.keys(PROJECTS).join('|')})\\b`, 'i').test(t.trim()) || /^(plan|approve|retry|cancel|discard|tasks|agents)\b|^work\s+on\b|^(build|test|push|checkpoint)\s+(sixes|crease)$|^(sixes|crease)\s+status$|^confirm\s+(build|push)$/i.test(t.trim()) };
