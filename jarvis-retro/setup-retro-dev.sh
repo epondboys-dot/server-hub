@@ -25,19 +25,7 @@ as_jarvis "cd '$REPO' && ~/.local/bin/pnpm exec playwright install chromium webk
 
 say "5. retro-test helper"
 mkdir -p /Users/jarvis/bin
-cat > /Users/jarvis/bin/retro-test <<EOF
-#!/bin/bash
-# Run Rewind Arcade checks for the checkout in the current folder (agent worktrees reuse the main clone's packages).
-set -e
-export PATH="$NODEBIN:/Users/jarvis/.local/bin:/opt/homebrew/bin:\$PATH"
-[ -d node_modules ] || ln -s $REPO/node_modules node_modules
-case "\${1:-test}" in
-  test) exec node --test tests/*.test.js ;;
-  build) exec pnpm build ;;
-  browser) shift || true; exec pnpm exec playwright test --project=webkit "\$@" ;;
-  *) echo "usage: retro-test [test|build|browser]"; exit 2 ;;
-esac
-EOF
+install -m 755 "$(dirname "$0")/retro-test" /Users/jarvis/bin/retro-test   # time-limited checks (see that file)
 chmod 755 /Users/jarvis/bin/retro-test
 chown -R jarvis:staff /Users/jarvis/bin
 grep -q 'Users/jarvis/bin' /Users/jarvis/.zprofile 2>/dev/null || echo 'export PATH="/Users/jarvis/bin:$PATH"' >> /Users/jarvis/.zprofile

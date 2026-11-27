@@ -1,0 +1,15 @@
+#!/bin/bash
+# Run Rewind Arcade checks for the checkout in the current folder (agent worktrees reuse the main clone's packages).
+# Each check has its own time limit (Nov 27: a browser run that hung used up a whole 30-minute agent task), so a
+# stuck run fails fast with a clear message and the agent can carry on.
+set -e
+REPO=/Users/jarvis/projects/retro-game-platform
+export PATH="/opt/homebrew/opt/node@24/bin:/Users/jarvis/.local/bin:/opt/homebrew/bin:$PATH"
+[ -d node_modules ] || ln -s "$REPO/node_modules" node_modules
+limit() { local s=$1; shift; perl -e '$SIG{ALRM}=sub{print STDERR "\nretro-test: stopped after '"$s"' seconds (time limit). Treat it as a failure; do not rerun the same thing unchanged.\n"; kill "TERM", -$$; exit 124}; alarm shift; setpgrp(0,0); $p=fork; if(!$p){exec @ARGV} waitpid($p,0); exit($?>>8)' "$s" "$@"; }
+case "${1:-test}" in
+  test)    limit 300 node --test tests/*.test.js ;;
+  build)   limit 300 pnpm build ;;
+  browser) shift || true; limit 480 pnpm exec playwright test --project=webkit --reporter=line "$@" ;;
+  *) echo "usage: retro-test [test|build|browser]"; exit 2 ;;
+esac

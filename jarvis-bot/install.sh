@@ -114,6 +114,12 @@ chown root:wheel "$LEARN_PLIST"; chmod 644 "$LEARN_PLIST"; plutil -lint "$LEARN_
 launchctl bootout system/com.pondboys.jarvis-learn 2>/dev/null || true
 launchctl bootstrap system "$LEARN_PLIST" && echo "    nightly learning scheduled (first run tonight, or send 'learn' in Discord)"
 
+say "4d. Test helpers for agents (installed with every update)"
+if [ -f "$SRC/../jarvis-retro/retro-test" ] && [ -d "$AGENT_HOME/projects/retro-game-platform" ]; then
+  install -d -o "$AGENT_USER" -g staff "$AGENT_HOME/bin"
+  install -m 755 -o "$AGENT_USER" -g staff "$SRC/../jarvis-retro/retro-test" "$AGENT_HOME/bin/retro-test" && echo "    retro-test (with time limits)"
+fi
+
 say "4c. Self-updates (com.pondboys.hub-update, root): Jarvis asks for them when idle; nightly fallback 04:20"
 LIB=/usr/local/libexec/pondboys; mkdir -p "$LIB" /usr/local/var/pondboys
 if [ -f "$SRC/../jarvis-update/hub-update.sh" ]; then

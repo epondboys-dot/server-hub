@@ -374,6 +374,30 @@ async function handle(text, author, cfg, reply, ctx = {}) {
   }
 
   if (v === 'retry') v = 'approve';
+  // `details T11`: why a task stopped and what it has changed so far, so the owner can keep, retry or discard it.
+  if (v === 'details') {
+    const t = state.tasks[String(rest[0] || '').toUpperCase()];
+    if (!t) return reply('Usage: `details <id>` (see `tasks`)');
+    const lines = [`**${t.id}** · ${NAME_OF[t.repo] || t.repo} · ${t.status}${t.agent ? ` · ${NAMES[t.agent] || t.agent}` : ''}`, `Request: ${short(t.request, 200)}`];
+    if (t.created) lines.push(`Asked ${ago(t.created)} ago${t.approved ? `, approved ${ago(t.approved)} ago` : ''}${t.finished ? `, ended ${ago(t.finished)} ago` : ''}`);
+    if (t.error) lines.push(`Stopped because: ${short(t.error, 400)}`);
+    const machine = machineFor(t.repo, cfg);
+    if (!machine && ['working', 'failed', 'interrupted', 'done'].includes(t.status)) {
+      const wt = path.join(WORK_DIR, t.id);
+      if (fs.existsSync(wt)) {
+        try {
+          const st = git(wt, ['status', '--porcelain']).split('\n').filter(Boolean);
+          const commits = t.base ? git(wt, ['log', '--oneline', `${t.base}..HEAD`]).split('\n').filter(Boolean) : [];
+          lines.push(`Copy at ~/work/${t.id}: ${commits.length} commit(s), ${st.length} uncommitted file(s)`);
+          for (const c of commits.slice(0, 5)) lines.push(`- ${c}`);
+          if (st.length) lines.push('Uncommitted: ' + st.slice(0, 12).map(l => l.slice(3)).join(', ') + (st.length > 12 ? ` (+${st.length - 12})` : ''));
+        } catch (e) { lines.push(`(couldn't read the copy: ${e.message.slice(0, 120)})`); }
+      } else lines.push('No copy is left on Jarvis.');
+    }
+    if (t.summary) lines.push(`Result: ${short(t.summary, 600)}`);
+    if (t.status === 'failed') lines.push(t.plan ? `\`retry ${t.id}\` starts over from the plan in a clean copy (the partial work is replaced); \`discard ${t.id}\` drops it.` : '');
+    return reply(lines.filter(Boolean).join('\n'));
+  }
   if (v === 'approve') {
     const t = state.tasks[String(rest[0] || '').toUpperCase()];
     if (!t) return reply('Usage: `approve <id>` (see `tasks`)');
@@ -431,7 +455,7 @@ async function handle(text, author, cfg, reply, ctx = {}) {
         `Approved plan:\n${t.plan}`,
       ].filter(Boolean).join('\n');
       const first = t.agent || 'claude', other = first === 'claude' ? 'codex' : 'claude';
-      const res = await runAuto(restingUntil(first) > Date.now() ? [other, first] : [first, other], cfg, wt, prompt, true, 30 * 60 * 1000, t.id, reply);
+      const res = await runAuto(restingUntil(first) > Date.now() ? [other, first] : [first, other], cfg, wt, prompt, true, 45 * 60 * 1000, t.id, reply);
       t.doneBy = res.agent; t.summary = res.out;
       if (git(wt, ['status', '--porcelain'])) {
         git(wt, ['add', '-A']);
@@ -699,4 +723,4 @@ async function workerOp(op, cfg, timeoutMs = 10 * 60000) {
 }
 
 module.exports = { loadPhrases, savePhrases, handle, converse, focusOf, whenIdle, busyLabel, workerOp, workStatus, USAGE, interruptedAtStart, nightlySixesCheckpoint, _test: { APPROVE_RE, PROJECTS, exclusive },
-  isTaskCommand: t => new RegExp(`^look\\s+(${Object.keys(PROJECTS).join('|')})\\b`, 'i').test(t.trim()) || /^(plan|approve|retry|cancel|discard|tasks|agents)\b|^work\s+on\b|^(build|test|push|checkpoint)\s+(sixes|crease)$|^(sixes|crease)\s+status$|^confirm\s+(build|push)$/i.test(t.trim()) };
+  isTaskCommand: t => new RegExp(`^look\\s+(${Object.keys(PROJECTS).join('|')})\\b`, 'i').test(t.trim()) || /^(plan|approve|retry|details|cancel|discard|tasks|agents)\b|^work\s+on\b|^(build|test|push|checkpoint)\s+(sixes|crease)$|^(sixes|crease)\s+status$|^confirm\s+(build|push)$/i.test(t.trim()) };
