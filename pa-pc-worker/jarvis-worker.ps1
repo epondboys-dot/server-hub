@@ -26,6 +26,9 @@ $env:GCM_INTERACTIVE = 'never'; $env:GIT_TERMINAL_PROMPT = '0'
 $GitAuth = if (Test-Path 'C:\ProgramData\jarvis-worker\git-credentials') {
   @('-c', 'credential.helper=', '-c', 'credential.helper=store --file=C:/ProgramData/jarvis-worker/git-credentials')
 } else { @() }
+# Agent and npm tools live in the user's npm folder, which isn't always on PATH (elevated or SSH sessions).
+$NpmDir = Join-Path $env:APPDATA 'npm'
+if ((Test-Path $NpmDir) -and ($env:Path -notlike "*$NpmDir*")) { $env:Path = "$NpmDir;$env:Path" }
 $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $Repos = @{
   'lax-sixes'  = @{ Path = 'G:\AI-Projects\lax-sixes'; Build = 'Lax Video Game\Build_DevelopmentEditor.bat'; Exclude = @(':(exclude,glob)**/.vsconfig', ':(exclude,glob)**/*.slnx') }
