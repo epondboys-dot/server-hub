@@ -282,6 +282,7 @@ function actionsFor(msg) {
     updates: { label: 'the version and update check', desc: 'Jarvis\'s version, what is new on GitHub, the last update result', run: cmd('updates') },
     knowledge: { label: 'the knowledge base summary', desc: 'what the local knowledge base holds and when it last learned', run: cmd('knowledge') },
     briefing: { label: 'the briefing', desc: 'the daily briefing: what needs the owner\'s attention across projects', run: cmd('briefing') },
+    crease_status: { label: 'The Crease status on the PA PC', desc: 'The Crease working folder on the PA PC: branch, changes, last backup', run: cmd('crease status') },
     sixes_status: { label: 'the Sixes status on the PA PC', desc: 'the Sixes lacrosse game working folder on the PA PC: branch, changes, last backup', run: cmd('sixes status') },
     phrases: { label: 'the learned phrases', desc: 'what phrases Jarvis has learned from the owner', run: cmd('phrases') },
   };

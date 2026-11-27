@@ -33,7 +33,7 @@ const PROJECTS = {
 // Where each project's agents work. Anything not listed runs here on Jarvis (~/projects, ~/work).
 // Sixes stays on the PA PC (owner, Nov 23): Jarvis reaches it over the hub network with a key that can only run
 // the PA PC worker script (plan, do, discard). Builds and the Unreal editor are never run by agents.
-const REMOTE = { 'lax-sixes': 'pa-pc' };
+const REMOTE = { 'lax-sixes': 'pa-pc', 'the-crease': 'pa-pc' }; // the owner's working folders on the PA PC
 function machineFor(repo, cfg) {
   if (REMOTE[repo] !== 'pa-pc') return null;
   return { id: 'pa-pc', name: 'PA PC', host: cfg.PA_PC_HOST || '10.10.10.87', user: cfg.PA_PC_USER || 'ebutc',
@@ -44,8 +44,10 @@ const TRADING_RULES = 'This is the Trading Desk repository. Follow AGENTS.md and
   'Never start, stop or move the desk; never touch a runtime folder, HARD_OFF.json or owner runtime files; ' +
   'never add order execution, live trading or a funded account; never put credentials anywhere.';
 
-const CREASE_NOTE = 'This is The Crease. Run its checks with crease-test (tests), crease-test lint and crease-test types; ' +
-  'they use the shared Python 3.12 environment. It is not deployed: never contact live services or add credentials.';
+const CREASE_NOTE = 'This is The Crease (lacrosse highlight video engine, Python) in the owner\'s working folder on the PA PC: preserve existing ' +
+  'local edits and work on the branch that is checked out. You have no shell: make code and text edits only. Jarvis backs the folder up before ' +
+  'and after, and the owner runs the tests separately (`test crease`); finish by naming the tests that cover your change. ' +
+  'It is not deployed: never contact live services or add credentials.';
 
 const RETRO_NOTE = 'This is Rewind Arcade. Run its checks with retro-test (unit), retro-test build and retro-test browser. ' +
   'Never deploy, never run the Deploy/Publish/Enable/Invite scripts, never contact the live store, Cloudflare or Supabase.';
@@ -231,8 +233,9 @@ const USAGE = [
   '- `plan <project> <what you want>`: read-only; replies with a plan and a task id. Jarvis picks Claude Code or Codex itself (switches when one hits its limit); add `--claude` or `--codex` to choose',
   '- `approve <id>`: carry out that plan in a separate copy on branch `jarvis/<id>`; commits there, never pushes',
   '- `tasks`: recent tasks · `cancel <id>`: stop a running task · `discard <id>`: delete its copy and branch',
-  '- Projects: trading, retro, crease, x3, bridges, hub (Jarvis\'s own code) (on Jarvis) · sixes (on the PA PC, in its working folder, backed up to GitHub before and after)',
+  '- Projects: trading, retro, x3, bridges, hub (Jarvis\'s own code) (on Jarvis) · sixes and crease (on the PA PC, in its working folders, backed up to GitHub before and after)',
   '- Sixes: `sixes status` · `checkpoint sixes` (backup, also nightly at 02:00) · `build sixes` · `push sixes` (both ask you to confirm)',
+  '- Crease: `crease status` · `checkpoint crease` (also nightly) · `test crease` · `push crease` (asks you to confirm)',
 ].join('\n');
 
 // "work on <plain words>": find the project (a project word in the text first, else the local model picks from the
@@ -268,24 +271,29 @@ async function handle(text, author, cfg, reply, ctx = {}) {
   // ---- Sixes on the PA PC: status, backups, builds, pushes (owner, Nov 25: as automated as possible) ----
   // checkpoint and status run straight away; build and push ask the owner to confirm (Unreal builds are approved
   // one at a time, Nov 23). The worker never force-pushes, so a push refuses if GitHub has newer work.
-  const sixesOp = /^(?:(build|push|checkpoint)\s+sixes|sixes\s+(status)|confirm\s+(build|push))$/i.exec(text.trim());
-  if (sixesOp) {
+  // Crease added Nov 27: `test crease` (= build) runs its tests straight away; push still asks to confirm.
+  const paOp = /^(?:(build|test|push|checkpoint)\s+(sixes|crease)|(sixes|crease)\s+(status)|confirm\s+(build|push))$/i.exec(text.trim());
+  if (paOp) {
     const m = machineFor('lax-sixes', cfg);
+    const [, ask0, w1, w2, stat, conf] = paOp.map(x => x && x.toLowerCase());
+    const pend = conf ? pendingConfirm.get(author) : null;
+    const word = w1 || w2 || (pend && pend.word) || 'sixes';
+    const repo = PROJECTS[word], label = word === 'sixes' ? 'Sixes' : 'The Crease';
+    const ask = ask0 === 'test' ? 'build' : ask0;
     const run = async (op, timeoutMs) => {
       if (busy()) return reply(`Busy with ${busy()}. Try again when it finishes.`);
-      try { return reply(await runProc('/usr/bin/ssh', cfg, HOME, sshArgs(m, `${op} T0 lax-sixes -`), timeoutMs, `sixes-${op}`, `the ${m.name} worker`, '')); }
-      catch (e) { return reply(`Sixes ${op} on the ${m.name}: ${e.message}`); }
+      try { return reply(await runProc('/usr/bin/ssh', cfg, HOME, sshArgs(m, `${op} T0 ${repo} -`), timeoutMs, `${word}-${op}`, `the ${m.name} worker`, '')); }
+      catch (e) { return reply(`${label} ${op} on the ${m.name}: ${e.message}`); }
     };
-    const [, ask, stat, conf] = sixesOp.map(x => x && x.toLowerCase());
     if (stat) return run('status', 60000);
-    if (ask === 'checkpoint') { await reply('Backing up the Sixes working folder on the PA PC to GitHub (the folder is not changed).'); return run('checkpoint', 10 * 60000); }
+    if (ask === 'checkpoint') { await reply(`Backing up the ${label} working folder on the PA PC to GitHub (the folder is not changed).`); return run('checkpoint', 10 * 60000); }
+    if (ask === 'build' && word === 'crease') { await reply('Running The Crease tests on the PA PC. I\'ll post the result here.'); return run('build', 30 * 60000); }
     if (ask) {
-      pendingConfirm.set(author, { action: ask, at: Date.now() });
+      pendingConfirm.set(author, { action: ask, word, at: Date.now() });
       return reply(ask === 'build' ? 'Build Sixes on the PA PC now (SixesGameEditor, Win64 Development, about 5 to 30 minutes)? Type `confirm build` within 5 minutes.'
-        : 'Push the PA PC\'s current Sixes branch to GitHub (fast-forward only; it refuses if GitHub has newer work)? Type `confirm push` within 5 minutes.');
+        : `Push the PA PC's current ${label} branch to GitHub (fast-forward only; it refuses if GitHub has newer work)? Type \`confirm push\` within 5 minutes.`);
     }
-    const p = pendingConfirm.get(author);
-    if (!p || p.action !== conf || Date.now() - p.at > 5 * 60000) return reply(`Nothing to confirm. Type \`${conf} sixes\` first.`);
+    if (!pend || pend.action !== conf || Date.now() - pend.at > 5 * 60000) return reply(`Nothing to confirm. Type \`${conf} sixes\` or \`${conf} crease\` first.`);
     pendingConfirm.delete(author);
     if (conf === 'build') { await reply('Building Sixes on the PA PC. I\'ll post the result here.'); return run('build', 120 * 60000); }
     return run('push', 10 * 60000);
@@ -392,7 +400,8 @@ async function handle(text, author, cfg, reply, ctx = {}) {
         const res = await runAuto(restingUntil(first) > Date.now() ? [other, first] : [first, other], cfg, HOME, prompt, true, 45 * 60 * 1000, t.id, reply, machine);
         t.doneBy = res.agent; t.summary = res.out; t.status = 'done'; t.finished = new Date().toISOString(); save();
         return reply([`**${t.id} done** on the ${machine.name} (${t.repo}, ${NAMES[t.doneBy] || ''})`, t.summary, '',
-          'Next: `build sixes` to compile it (you confirm), `sixes status`, or `push sixes` once it is committed and the rigs are in sync.'].join('\n'));
+          t.repo === 'the-crease' ? 'Next: `test crease` to run its tests, `crease status`, or `push crease` once it is committed.'
+            : 'Next: `build sixes` to compile it (you confirm), `sixes status`, or `push sixes` once it is committed and the rigs are in sync.'].join('\n'));
       } catch (e) {
         t.status = 'failed'; t.error = e.message; t.finished = new Date().toISOString(); save();
         return reply(`**${t.id}** stopped on the ${machine.name}: ${e.message}\nAny edits it made are in the working folder; the "before" backup branch on GitHub has the state from just before it started.`);
@@ -632,8 +641,12 @@ function focusOf(channel) { return (state.focus || {})[channel || 'dm'] || null;
 // Nightly backup of the Sixes working folder (non-destructive; skipped quietly if the PA PC is off).
 async function nightlySixesCheckpoint(cfg) {
   if (busy()) return null;
-  try { return await runProc('/usr/bin/ssh', cfg, HOME, sshArgs(machineFor('lax-sixes', cfg), 'checkpoint T0 lax-sixes -'), 10 * 60000, 'sixes-nightly', 'the PA PC worker', ''); }
-  catch (e) { return `Nightly Sixes backup skipped: ${e.message.slice(0, 200)}`; }
+  const out = [];
+  for (const repo of ['lax-sixes', 'the-crease']) {
+    try { out.push(await runProc('/usr/bin/ssh', cfg, HOME, sshArgs(machineFor(repo, cfg), `checkpoint T0 ${repo} -`), 10 * 60000, `${repo}-nightly`, 'the PA PC worker', '')); }
+    catch (e) { out.push(`Nightly ${repo} backup skipped: ${e.message.slice(0, 200)}`); }
+  }
+  return out.join('\n');
 }
 
 // A few phone-sized lines for `status`: is anything actually being worked on, and how far along.
@@ -678,4 +691,4 @@ async function workerOp(op, cfg, timeoutMs = 10 * 60000) {
 }
 
 module.exports = { loadPhrases, savePhrases, handle, converse, focusOf, whenIdle, busyLabel, workerOp, workStatus, USAGE, interruptedAtStart, nightlySixesCheckpoint, _test: { APPROVE_RE, PROJECTS, exclusive },
-  isTaskCommand: t => new RegExp(`^look\\s+(${Object.keys(PROJECTS).join('|')})\\b`, 'i').test(t.trim()) || /^(plan|approve|cancel|discard|tasks|agents)\b|^work\s+on\b|^(build|push|checkpoint)\s+sixes$|^sixes\s+status$|^confirm\s+(build|push)$/i.test(t.trim()) };
+  isTaskCommand: t => new RegExp(`^look\\s+(${Object.keys(PROJECTS).join('|')})\\b`, 'i').test(t.trim()) || /^(plan|approve|cancel|discard|tasks|agents)\b|^work\s+on\b|^(build|test|push|checkpoint)\s+(sixes|crease)$|^(sixes|crease)\s+status$|^confirm\s+(build|push)$/i.test(t.trim()) };

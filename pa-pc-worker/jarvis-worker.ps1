@@ -27,7 +27,11 @@ $GitAuth = if (Test-Path 'C:\ProgramData\jarvis-worker\git-credentials') {
   @('-c', 'credential.helper=', '-c', 'credential.helper=store --file=C:/ProgramData/jarvis-worker/git-credentials')
 } else { @() }
 $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
-$Repos = @{ 'lax-sixes' = @{ Path = 'G:\AI-Projects\lax-sixes'; Build = 'Lax Video Game\Build_DevelopmentEditor.bat'; Exclude = @(':(exclude,glob)**/.vsconfig', ':(exclude,glob)**/*.slnx') } }
+$Repos = @{
+  'lax-sixes'  = @{ Path = 'G:\AI-Projects\lax-sixes'; Build = 'Lax Video Game\Build_DevelopmentEditor.bat'; Exclude = @(':(exclude,glob)**/.vsconfig', ':(exclude,glob)**/*.slnx') }
+  # The Crease (owner, Nov 27): its working folder here; `build` runs its test suite in the folder's own Python environment.
+  'the-crease' = @{ Path = 'G:\AI-Projects\content-engine-the-crease'; Test = '.venv\Scripts\python.exe'; TestArgs = @('-m', 'pytest', '-q', '-x', '--no-header'); Exclude = @() }
+}
 $WorkRoot = 'G:\AI-Projects\_jarvis-work'
 $Log = Join-Path $WorkRoot 'worker.log'
 New-Item -ItemType Directory -Force $WorkRoot | Out-Null
@@ -107,6 +111,19 @@ switch ($action) {
     exit 0
   }
   'build' {
+    if ($P.Test) {   # projects without a compile step: run the test suite
+      $py = Join-Path $repo $P.Test
+      if (-not (Test-Path $py)) { Fail "Test runner not found: $py" }
+      $logFile = Join-Path $WorkRoot ("test-{0}-{1}.log" -f $repoName, (Get-Date -Format 'yyyyMMdd-HHmmss'))
+      $start = Get-Date
+      Push-Location $repo; & $py @($P.TestArgs) *> $logFile; $code = $LASTEXITCODE; Pop-Location
+      $mins = [math]::Round(((Get-Date) - $start).TotalMinutes, 1)
+      $tail = Get-Content $logFile -Tail 15 | Where-Object { $_.Trim() }
+      Note "test $repoName exit $code in $mins min ($logFile)"
+      if ($code -ne 0) { Write-Output "TESTS FAILED after $mins min. Log: $logFile"; $tail | Select-Object -Last 12; exit 5 }
+      Write-Output "TESTS PASSED in $mins min. Log: $logFile"; $tail | Select-Object -Last 2
+      exit 0
+    }
     $bat = Join-Path $repo $P.Build
     if (-not (Test-Path $bat)) { Fail "Build script not found: $bat" }
     $logFile = Join-Path $WorkRoot ("build-{0}-{1}.log" -f $id, (Get-Date -Format 'yyyyMMdd-HHmmss'))
