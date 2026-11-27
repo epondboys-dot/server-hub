@@ -98,7 +98,7 @@ switch ($action) {
     $ab = (G rev-list --left-right --count "HEAD...origin/$b" | Select-Object -Last 1).Trim() -split '\s+'
     $changed = @(& git.exe @GitAuth -C $repo status --porcelain).Count
     $last = (& git.exe @GitAuth -C $repo ls-remote --heads origin 'checkpoint/pa-*' | ForEach-Object { ($_ -split "`t")[1] -replace '^refs/heads/', '' } | Sort-Object | Select-Object -Last 1)
-    Write-Output "Sixes on the PA PC: branch $b, $($ab[0]) ahead / $($ab[1]) behind GitHub, $changed changed or new files. Last checkpoint: $(if ($last) { $last } else { 'none yet' })."
+    Write-Output "$(@{ 'lax-sixes' = 'Sixes'; 'the-crease' = 'The Crease' }[$repoName]) on the PA PC: branch $b, $($ab[0]) ahead / $($ab[1]) behind GitHub, $changed changed or new files. Last checkpoint: $(if ($last) { $last } else { 'none yet' })."
     exit 0
   }
   'checkpoint' { $c = Checkpoint 'requested'; Write-Output "Backed up to GitHub branch $($c.Ref) ($($c.Commit.Substring(0,7))). The working folder was not changed."; exit 0 }
