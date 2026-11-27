@@ -1,23 +1,32 @@
-// Tailscale access policy for PondBoys' hub (written Nov 23, 2026).
+// Tailscale access policy for PondBoys' hub (written Nov 23, 2026; Nov 27: owner-only servers, Bridges founders).
 // Paste into login.tailscale.com > Access controls, replacing everything there.
 //
 // - Servers carry tags: jarvis = tag:hub, tradingserver = tag:trading.
-// - Your own devices (phone, PCs) can SSH into both servers.
-// - Jarvis can SSH into tradingserver (the Discord bot's status check and admin).
+// - Only the tailnet admin (the owner) reaches the servers and the desk's phone page. Invited people are members,
+//   not admins, so they get nothing unless a rule below names them.
+// - Bridges founders: add their Tailscale login emails to group:bridges. They can SSH to Jarvis only, where
+//   add-founder.sh gives each one a standard account that sees the Bridges code and nothing else.
+// - Jarvis can SSH into tradingserver (the Discord bot's desk commands and updates).
 // - tradingserver can reach nothing; nothing else is allowed.
 {
+  "groups": {
+    "group:bridges": []   // e.g. ["founder1@gmail.com", "founder2@gmail.com"]
+  },
+
   "tagOwners": {
     "tag:hub":     ["autogroup:admin"],
     "tag:trading": ["autogroup:admin"]
   },
 
   "grants": [
-    // Your personal devices -> both servers, SSH only
-    {"src": ["autogroup:member"], "dst": ["tag:hub", "tag:trading"], "ip": ["tcp:22"]},
+    // Owner's devices -> both servers, SSH only
+    {"src": ["autogroup:admin"], "dst": ["tag:hub", "tag:trading"], "ip": ["tcp:22"]},
+    // Owner's devices -> the desk's phone page on tradingserver (tailscale serve, HTTPS). Added Nov 24, 2026.
+    {"src": ["autogroup:admin"], "dst": ["tag:trading"], "ip": ["tcp:443"]},
+    // Bridges founders -> Jarvis, SSH only (their own restricted Mac accounts). Added Nov 27, 2026.
+    {"src": ["group:bridges"], "dst": ["tag:hub"], "ip": ["tcp:22"]},
     // Jarvis -> tradingserver, SSH only
-    {"src": ["tag:hub"], "dst": ["tag:trading"], "ip": ["tcp:22"]},
-    // Your personal devices -> the desk's phone page on tradingserver (tailscale serve, HTTPS). Added Nov 24, 2026.
-    {"src": ["autogroup:member"], "dst": ["tag:trading"], "ip": ["tcp:443"]}
+    {"src": ["tag:hub"], "dst": ["tag:trading"], "ip": ["tcp:22"]}
   ],
 
   "tests": [
