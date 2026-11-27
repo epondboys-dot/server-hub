@@ -10,7 +10,7 @@ controls, for AI coding work, review and sample-data testing.
    Base44 creates a private repo with the app's code. No client data or secrets are exported.
    Base44 keeps GitHub main and the live app in sync both ways: anything merged to main goes live.
 3. On Jarvis: `sudo bash setup-bridges.sh key`, add the printed key to the repo as a read-only deploy key
-   (Settings > Deploy keys, leave "Allow write access" unchecked), then `sudo bash setup-bridges.sh clone <org>/<repo>`.
+   (Settings > Deploy keys, tick "Allow write access"; first enable deploy keys in the org: Settings > Member privileges > Deploy keys), then `sudo bash setup-bridges.sh clone <org>/<repo>`.
 4. Discord: "what's in the bridges app?", "plan bridges ...". Agents work on branches in copies and cannot push.
 
 Rules agents get for this project: code only, never run against the live Base44 backend, made-up sample data only, no new
@@ -29,3 +29,10 @@ nothing on Jarvis. If a founder also needs to work *on Jarvis* (for example to u
 3. They connect with `ssh btb-<name>@jarvis` over Tailscale and push with their own GitHub accounts.
 
 Still owner-only: Jarvis in Discord (agents, desk, updates). A Bridges-only Discord channel for founders can come later.
+
+## How agent work reaches the app (Nov 27)
+
+Agent finishes a Bridges task -> Jarvis pushes it to branch `jarvis/T<n>` on the nonprofit repo and posts a review link ->
+a founder reviews and merges on GitHub -> Base44 syncs main into the live app. Jarvis never pushes main: his code only
+pushes jarvis/T<n>, and a root-owned pre-push hook in the clone refuses anything else. Apply for GitHub for Nonprofits
+(free Team plan for verified 501(c)(3)s) to also lock main on GitHub itself (required review before merge).

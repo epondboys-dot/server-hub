@@ -61,9 +61,13 @@ const SIXES_NOTE = 'This is the Sixes lacrosse game (Unreal Engine 5.8) in the o
   'finish by saying exactly what to build or pad-test to check your change.';
 const BRIDGES_NOTE = 'This is the Bridges to Brilliance app (nonprofit; Base44 app with client, staff and doctor profiles). Its live app and every ' +
   'client record stay on Base44: you only ever see code. Base44 syncs GitHub main straight into the LIVE app, so your work stays on your own branch ' +
-  'and the owner decides what reaches main. Never run the app or its tests against the live Base44 backend, never add real names or records, ' +
+  'and a founder reviews and merges it (merging to main publishes it live). Never run the app or its tests against the live Base44 backend, never add real names or records, ' +
   'use made-up sample data only, never add analytics, tracking or new data collection, and keep assessment scoring logic separate from any AI ' +
   'explanation text. The users include neurodivergent people: keep wording plain, calm and literal. Flag anything touching personal or health data.';
+const AUTO_PUSH = new Set(['bridges-app']); // repos where Jarvis pushes finished work to a jarvis/T<n> branch
+function remoteWebUrl(dir) {
+  try { const u = git(dir, ['remote', 'get-url', 'origin']).trim(); const m = /github\.com[:/](.+?)(?:\.git)?$/.exec(u); return m ? `https://github.com/${m[1]}` : null; } catch { return null; }
+}
 const HUB_NOTE = 'This is server-hub: the hub\'s own code (the Jarvis bot, the self-updater, setup scripts, the PA PC worker). ' +
   'Check changed files with node --check (JavaScript) and bash -n (shell). Never run install or setup scripts, never use sudo, ' +
   'never read or print tokens or settings files. Read /Library/Logs/hub-update.log and ~/Library/Logs/jarvis-bot.log if a problem needs them. ' +
@@ -464,6 +468,22 @@ async function handle(text, author, cfg, reply, ctx = {}) {
       const log = git(wt, ['log', '--oneline', `${t.base}..HEAD`]) || '(no commits)';
       const stat = git(wt, ['diff', '--stat', `${t.base}..HEAD`]) || '(no file changes)';
       t.status = 'done'; t.finished = new Date().toISOString(); save();
+      // Bridges (owner, Nov 27): Jarvis pushes the finished work to ITS OWN branch on the nonprofit's repo for a founder
+      // to review and merge. Only refs/heads/jarvis/T<n> is ever pushed, never main (main is the live app).
+      if (AUTO_PUSH.has(t.repo) && log !== '(no commits)') {
+        if (!/^jarvis\/T\d+$/.test(branch)) throw new Error(`refusing to push ${branch}`);
+        let pushed = '';
+        try { git(wt, ['push', 'origin', `refs/heads/${branch}:refs/heads/${branch}`]); pushed = 'ok'; } catch (e) { pushed = e.message.slice(0, 300); }
+        const url = remoteWebUrl(src);
+        return reply([
+          `**${t.id} done** (${t.repo}, ${NAMES[t.doneBy] || ''})`, t.summary, '',
+          '```', log, stat.split('\n').slice(-12).join('\n'), '```',
+          pushed === 'ok'
+            ? `Pushed to branch \`${branch}\` (not live). Review and merge it on GitHub; merging into main publishes it to the live app:\n${url ? `${url}/compare/main...${branch}?expand=1` : '(open the repo on GitHub, Pull requests > New)'}`
+            : `Couldn't push the branch (${pushed}). The work is kept at ~/work/${t.id}.`,
+          `Or \`discard ${t.id}\` to drop it.`,
+        ].join('\n'));
+      }
       return reply([
         `**${t.id} done** (${t.repo}, ${NAMES[t.doneBy] || ''}, branch \`${branch}\`)`, t.summary, '',
         '```', log, stat.split('\n').slice(-12).join('\n'), '```',
